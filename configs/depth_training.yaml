@@ -4,6 +4,7 @@ system:
   port: 12355
 note: ""
 batch_size: 8
+probe_from_checkpoint: ""
 defaults:
   - optimizer: ten_epoch
   - backbone: dinov2_b14

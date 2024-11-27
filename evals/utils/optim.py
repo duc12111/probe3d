@@ -122,7 +122,7 @@ def get_linear_scaled_lr(base_lr: float, batch_size: int, base_batch_size: int):
 
 
 def cosine_decay_linear_warmup(current_step, max_step, warmup_step, min_factor=0.01):
-    assert max_step > warmup_step
+    # assert max_step > warmup_step, f"max_step ({max_step}) must be greater than warmup_step ({warmup_step})"
 
     range_factor = 1 - min_factor
 

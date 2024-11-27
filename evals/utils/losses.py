@@ -68,6 +68,38 @@ def sig_loss(depth_pr, depth_gt, sigma=0.85, eps=0.001, only_mean=False):
     loss = loss.sqrt()
     return loss
 
+def sig_loss_v2(depth_pr, depth_gt, sigma=0.85, eps=0.001, only_mean=False):
+    """
+    SigLoss v2 with batch-wise valid sqrt 
+
+    Args:
+        depth_pr (FloatTensor): predicted depth
+        depth_gt (FloatTensor): groundtruth depth
+        eps (float): to avoid exploding gradient
+    """
+    # Assuming 'valid' is a boolean mask of the same shape as 'depth_gt'
+    valid = (depth_gt > 0).detach().float()
+
+    # Mask the predictions and ground truth
+    depth_pr_masked = depth_pr * valid 
+    depth_gt_masked = depth_gt * valid
+
+    # Compute 'g' with masked depths 
+    g = torch.log(depth_pr_masked + eps) - torch.log(depth_gt_masked + eps)
+
+    # Since invalid entries are zero, they will contribute to 'g' and affect the loss.
+    # We need to adjust 'g' to exclude these zero entries from the calculations.
+
+    # Exclude invalid entries from 'g' using the same mask
+    g = g * valid
+
+    # Calculate loss, taking into account the number of valid pixels
+    num_valid = valid.sum(dim=(-1,-2)).clamp(min=1)
+
+    loss = (g.pow(2).sum(dim=(-1,-2)) / num_valid) - sigma * (g.sum(dim=(-1,-2)) / num_valid).pow(2)
+    loss = loss.sqrt().mean()
+    return loss
+
 
 class DepthLoss(nn.Module):
     def __init__(self, weight_sig=10.0, weight_grad=0.5, max_depth=10):
@@ -81,9 +113,18 @@ class DepthLoss(nn.Module):
         # 0 out max depth so it gets ignored
         target[target > self.max_depth] = 0
 
-        loss_s = self.sig_w * sig_loss(pred, target)
+        loss_s = self.sig_w * sig_loss_v2(pred, target)
+        #TODO: to remove the assert
+        loss_s2 = 0
+        if pred.ndim == 4 and pred.shape[0] == 2:
+            loss_s2 = 0.5*self.sig_w * sig_loss(pred[0], target[0])
+            loss_s2 += 0.5*self.sig_w * sig_loss(pred[1], target[1])
+        else:
+            loss_s2 = self.sig_w * sig_loss(pred, target)
+        assert abs(loss_s - loss_s2) < 0.001, f"{loss_s} != {loss_s2}"
         loss_g = self.grad_w * gradient_loss(pred, target)
-        return loss_s + loss_g
+        loss = loss_s + loss_g
+        return loss
 
 
 def gradient_loss(depth_pr, depth_gt, eps=0.001):
@@ -127,6 +168,52 @@ def gradient_loss(depth_pr, depth_gt, eps=0.001):
         gradient_loss += (torch.sum(h_gradient) + torch.sum(v_gradient)) / N
 
     return gradient_loss
+
+
+def gradient_loss_v2(depth_pr, depth_gt, eps=0.001):
+    """GradientLoss.
+
+    Adapted from https://www.cs.cornell.edu/projects/megadepth/ and DINOv2 repo
+
+    Args:
+        depth_pr (FloatTensor): predicted depth
+        depth_gt (FloatTensor): groundtruth depth
+        eps (float): to avoid exploding gradient
+    """
+    if depth_gt.ndim == 4:
+        depth_pr = depth_pr.squeeze(1)
+        depth_gt = depth_gt.squeeze(1)
+
+    depth_pr_downscaled = [depth_pr] + [
+        depth_pr[:,:: 2 * i, :: 2 * i] for i in range(1, 4)
+    ]
+    depth_gt_downscaled = [depth_gt] + [
+        depth_gt[:,:: 2 * i, :: 2 * i] for i in range(1, 4)
+    ]
+    gradient_loss = 0
+    for depth_pr, depth_gt in zip(depth_pr_downscaled, depth_gt_downscaled):
+
+        # ignore invalid depth pixels
+        valid = (depth_gt > 0).detach().float()
+        num_valid = valid.sum(dim=(-1,-2)).clamp(min=1)
+
+        depth_pr_log = torch.log(depth_pr + eps)
+        depth_gt_log = torch.log(depth_gt + eps)
+        log_d_diff = depth_pr_log - depth_gt_log
+
+        log_d_diff = torch.mul(log_d_diff, valid)
+
+        v_gradient = torch.abs(log_d_diff[:,0:-2, :] - log_d_diff[:,2:, :])
+        v_valid = torch.mul(valid[:,0:-2, :], valid[:,2:, :])
+        v_gradient = torch.mul(v_gradient, v_valid)
+
+        h_gradient = torch.abs(log_d_diff[:,:,0:-2] - log_d_diff[:,:,2:])
+        h_valid = torch.mul(valid[:,:,0:-2], valid[:,:,2:])
+        h_gradient = torch.mul(h_gradient, h_valid)
+
+        gradient_loss += (torch.sum(h_gradient, dim=(-1,-2)) + torch.sum(v_gradient, dim=(-1,-2))) / num_valid
+
+    return gradient_loss.mean()
 
 
 def angular_loss(snorm_pr, snorm_gt, mask, uncertainty_aware=False, eps=1e-4):

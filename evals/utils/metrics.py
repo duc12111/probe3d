@@ -75,7 +75,7 @@ def evaluate_depth(
     # get num valid
     num_valid = valid.sum(dim=(1, 2)).clamp(min=1)
 
-    # get recall @ thresholds
+    # get recall @ threshold
     thresh = torch.maximum(
         depth_gt / depth_pr.clamp(min=1e-9), depth_pr / depth_gt.clamp(min=1e-9)
     )
