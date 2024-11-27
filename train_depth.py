@@ -40,6 +40,7 @@ from torch.nn.functional import interpolate
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim.lr_scheduler import LambdaLR
 from tqdm import tqdm
+from torch.utils.tensorboard import SummaryWriter
 
 from evals.datasets.builder import build_loader
 from evals.utils.losses import DepthLoss
@@ -71,6 +72,7 @@ def train(
     rank=0,
     world_size=1,
     valid_loader=None,
+    writer=None,
     scale_invariant=False,
 ):
     for ep in range(n_epochs):
@@ -93,6 +95,7 @@ def train(
                         feats = feats.detach()
             else:
                 feats = model(images)
+
             pred = probe(feats)
             pred = interpolate(pred, size=target.shape[-2:], mode="bilinear")
 
@@ -100,7 +103,11 @@ def train(
                 pred = match_scale_and_shift(pred, target)
                 pred = pred.clamp(min=0.001, max=10.0)
 
-            loss = loss_fn(pred, target)
+            if i % 100 == 0:
+                writer.add_image('LOSS/pred', pred[0] / 10, ep * len(train_loader) + i)
+                writer.add_image('LOSS/gt', target[0] / 10, ep * len(train_loader) + i)
+
+            loss, loss_dict = loss_fn(pred, target)
             loss.backward()
             optimizer.step()
             scheduler.step()
@@ -114,25 +121,35 @@ def train(
                 pbar.set_description(
                     f"{ep} | loss: {loss:.4f} ({_loss:.4f}) probe_lr: {pr_lr:.2e}"
                 )
+                if i % 100 == 0:
+                    writer.add_scalar(f'Loss', _loss, ep * len(train_loader) + i)
+                    for key, value in loss_dict.items():
+                        writer.add_scalar(f'Loss_{key}', value, ep * len(train_loader) + i)
+
 
         train_loss /= len(train_loader)
 
         if rank == 0:
             logger.info(f"train loss {ep}   | {train_loss:.4f}")
             if valid_loader is not None:
+                print('Evaluate:', len(valid_loader))
                 val_loss, val_metrics = validate(
-                    model, probe, valid_loader, loss_fn, scale_invariant=scale_invariant
+                    model, probe, valid_loader, loss_fn, scale_invariant=True,writer=writer, epoch= ep
                 )
                 logger.info(f"valid loss {ep}   | {val_loss:.4f}")
+                writer.add_scalar(f'Eval/loss', val_loss, (ep + 1) * len(train_loader))
                 for metric in val_metrics:
                     logger.info(f"valid SA {metric:10s} | {val_metrics[metric]:.4f}")
+                    writer.add_scalar(f'Eval/{metric}', val_metrics[metric], (ep+1) * len(train_loader))
+
 
 
 def validate(
-    model, probe, loader, loss_fn, verbose=True, scale_invariant=False, aggregate=True
+    model, probe, loader, loss_fn, verbose=True, scale_invariant=False, aggregate=True, writer=None, epoch=0
 ):
     total_loss = 0.0
     metrics = None
+    iteration = epoch * len(loader)
     with torch.inference_mode():
         pbar = tqdm(loader, desc="Evaluation") if verbose else loader
         for batch in pbar:
@@ -143,7 +160,11 @@ def validate(
             pred = probe(feat).detach()
             pred = interpolate(pred, size=target.shape[-2:], mode="bilinear")
 
-            loss = loss_fn(pred, target)
+            writer.add_image('EVAL/pred', pred[0] / 10 , iteration)
+            writer.add_image('EVAL/gt', target[0] / 10, iteration)
+            iteration += 1
+            
+            loss, _ = loss_fn(pred, target)
             total_loss += loss.item()
 
             batch_metrics = evaluate_depth(
@@ -180,7 +201,13 @@ def train_model(rank, world_size, cfg):
     trainval_loader.dataset.__getitem__(0)
 
     # ===== Get models =====
+    print('loading')
+    #checkpoint = torch.load("depth_exps/07102024-1905_vit-mae-base_16_2-5-8-11_dense_bindepth_dpt_k3_10_1.50_0.0005_0.0_8_NYUv2_NYUv2/ckpt.pth")
+    #"depth_exps/03102024-2156_snapshot_194_0.524.pth_16_last_dense_bindepth_linear_k3_10_1.50_0.0005_0.0_8_NYUv2_NYUv2/ckpt.pth")
+    #cfg = checkpoint['cfg']
+    print('cfg', cfg.backbone)
     model = instantiate(cfg.backbone)
+    print('MODEL OUTFEATURESIZE 120')
     probe = instantiate(
         cfg.probe, feat_dim=model.feat_dim, max_depth=trainval_loader.dataset.max_depth
     )
@@ -214,6 +241,8 @@ def train_model(rank, world_size, cfg):
     exp_name = exp_name.replace(" ", "")  # remove spaces
 
     # ===== SETUP LOGGING =====
+    writer = SummaryWriter(f'log_dir/{exp_name}')
+
     if rank == 0:
         exp_path = Path(__file__).parent / f"depth_exps/{exp_name}"
         exp_path.mkdir(parents=True, exist_ok=True)
@@ -266,13 +295,14 @@ def train_model(rank, world_size, cfg):
         loss_fn=loss_fn,
         rank=rank,
         world_size=world_size,
-        # valid_loader=test_loader,
+        valid_loader=test_loader,
+        writer= writer
     )
 
     if rank == 0:
         logger.info(f"Evaluating on test split of {test_dset}")
 
-        test_sa_loss, test_sa_metrics = validate(model, probe, test_loader, loss_fn)
+        test_sa_loss, test_sa_metrics = validate(model, probe, test_loader, loss_fn, writer=writer, epoch=10*len(trainval_loader))
         logger.info(f"Scale-Aware Final test loss       | {test_sa_loss:.4f}")
         for metric in test_sa_metrics:
             logger.info(f"Final test SA {metric:10s} | {test_sa_metrics[metric]:.4f}")
@@ -280,7 +310,7 @@ def train_model(rank, world_size, cfg):
 
         # get scale invariant
         test_si_loss, test_si_metrics = validate(
-            model, probe, test_loader, loss_fn, scale_invariant=True
+            model, probe, test_loader, loss_fn, scale_invariant=True, writer=writer, epoch=10*len(trainval_loader)
         )
         logger.info(f"Scale-Invariant Final test loss       | {test_si_loss:.4f}")
         for metric in test_si_metrics:
@@ -297,8 +327,8 @@ def train_model(rank, world_size, cfg):
         ckpt_path = exp_path / "ckpt.pth"
         checkpoint = {
             "cfg": cfg,
-            "model": model.module.state_dict(),
-            "probe": probe.module.state_dict(),
+            "model": model.state_dict() if not isinstance(model, DDP) else model.module.state_dict(),
+            "probe": probe.state_dict() if not isinstance(probe, DDP) else probe.module.state_dict(),
         }
         torch.save(checkpoint, ckpt_path)
         logger.info(f"Saved checkpoint at {ckpt_path}")
