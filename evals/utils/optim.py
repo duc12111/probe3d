@@ -131,3 +131,9 @@ def cosine_decay_linear_warmup(current_step, max_step, warmup_step, min_factor=0
     else:
         rel_step = (current_step - warmup_step) / (max_step - warmup_step)
         return range_factor * np.cos(0.5 * rel_step * np.pi) + min_factor
+
+def linear_decay_lr(current_step, max_step, warmup_step, min_factor=0.01):
+    range_factor = 1 - min_factor
+
+    rel_step = 1 - current_step / max_step
+    return range_factor * rel_step + min_factor

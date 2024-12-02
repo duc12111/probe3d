@@ -61,7 +61,6 @@ def sig_loss(depth_pr, depth_gt, sigma=0.85, eps=0.001, only_mean=False):
     valid = depth_gt > 0
     depth_pr = depth_pr[valid]
     depth_gt = depth_gt[valid]
-
     g = torch.log(depth_pr + eps) - torch.log(depth_gt + eps)
 
     loss = g.pow(2).mean() - sigma * g.mean().pow(2)
@@ -100,6 +99,28 @@ def sig_loss_v2(depth_pr, depth_gt, sigma=0.85, eps=0.001, only_mean=False):
     loss = loss.sqrt().mean()
     return loss
 
+class L1Loss(nn.Module):
+    def __init__(self, max_depth=10):
+        super().__init__()
+        self.max_depth = max_depth
+
+    def forward(self, pred, target):
+        valid = ((target > 0) & (target < self.max_depth)).detach().float()
+        loss = torch.abs(pred - target)
+        loss = (loss * valid).sum(dim=(-1,-2))
+        print(loss)
+        return loss.mean(), {"l1_loss": loss.mean()}
+
+class L1LogLossV2(nn.Module):
+    def __init__(self, max_depth=10):
+        super().__init__()
+        self.max_depth = max_depth
+
+    def forward(self, pred, target):
+        valid = ((target > 0) & (target < self.max_depth)).detach().float()
+        loss = torch.abs(torch.log(pred) - torch.log(target))
+        loss = (loss * valid).sum(dim=(-1,-2))
+        return loss.mean(), {"l1_loss": loss.mean()}
 
 class DepthLoss(nn.Module):
     def __init__(self, weight_sig=10.0, weight_grad=0.5, max_depth=10):
@@ -114,17 +135,9 @@ class DepthLoss(nn.Module):
         target[target > self.max_depth] = 0
 
         loss_s = self.sig_w * sig_loss_v2(pred, target)
-        #TODO: to remove the assert
-        loss_s2 = 0
-        if pred.ndim == 4 and pred.shape[0] == 2:
-            loss_s2 = 0.5*self.sig_w * sig_loss(pred[0], target[0])
-            loss_s2 += 0.5*self.sig_w * sig_loss(pred[1], target[1])
-        else:
-            loss_s2 = self.sig_w * sig_loss(pred, target)
-        assert abs(loss_s - loss_s2) < 0.001, f"{loss_s} != {loss_s2}"
-        loss_g = self.grad_w * gradient_loss(pred, target)
+        loss_g = self.grad_w * gradient_loss_v2(pred, target)
         loss = loss_s + loss_g
-        return loss
+        return loss, {"loss_s": loss_s, "loss_g": loss_g}
 
 
 def gradient_loss(depth_pr, depth_gt, eps=0.001):

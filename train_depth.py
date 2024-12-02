@@ -43,9 +43,9 @@ from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 
 from evals.datasets.builder import build_loader
-from evals.utils.losses import DepthLoss
+from evals.utils.losses import DepthLoss, L1Loss
 from evals.utils.metrics import evaluate_depth, match_scale_and_shift
-from evals.utils.optim import cosine_decay_linear_warmup
+from evals.utils.optim import cosine_decay_linear_warmup, linear_decay_lr
 
 
 def ddp_setup(rank: int, world_size: int, port: int):
@@ -122,9 +122,11 @@ def train(
                     f"{ep} | loss: {loss:.4f} ({_loss:.4f}) probe_lr: {pr_lr:.2e}"
                 )
                 if i % 100 == 0:
-                    writer.add_scalar(f'Loss', _loss, ep * len(train_loader) + i)
+                    writer.add_scalar(f'Accumulated_Loss', _loss, ep * len(train_loader) + i)
+                    writer.add_scalar(f'Loss', loss, ep * len(train_loader) + i)
                     for key, value in loss_dict.items():
                         writer.add_scalar(f'Loss_{key}', value, ep * len(train_loader) + i)
+                    writer.add_scalar(f'probe_lr', pr_lr, ep * len(train_loader) + i)
 
 
         train_loss /= len(train_loader)
@@ -241,7 +243,7 @@ def train_model(rank, world_size, cfg):
     exp_name = exp_name.replace(" ", "")  # remove spaces
 
     # ===== SETUP LOGGING =====
-    writer = SummaryWriter(f'log_dir/{exp_name}')
+    writer = SummaryWriter(f'logdir/L1Loss/{exp_name}')
 
     if rank == 0:
         exp_path = Path(__file__).parent / f"depth_exps/{exp_name}"
@@ -276,13 +278,13 @@ def train_model(rank, world_size, cfg):
             ]
         )
 
-    lambda_fn = lambda epoch: cosine_decay_linear_warmup(  # noqa: E731
+    lambda_fn = lambda epoch: linear_decay_lr(  # noqa: E731
         epoch,
         cfg.optimizer.n_epochs * len(trainval_loader),
         cfg.optimizer.warmup_epochs * len(trainval_loader),
     )
     scheduler = LambdaLR(optimizer, lr_lambda=lambda_fn)
-    loss_fn = DepthLoss()
+    loss_fn = L1Loss()
 
     train(
         model,
