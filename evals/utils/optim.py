@@ -22,6 +22,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 from __future__ import annotations
+import math
 
 import numpy as np
 import torch
@@ -137,3 +138,39 @@ def linear_decay_lr(current_step, max_step, warmup_step, min_factor=0.01):
 
     rel_step = 1 - current_step / max_step
     return range_factor * rel_step + min_factor
+
+def get_cosine_schedule_with_warmup_LambdaLR(
+    optimizer: torch.optim.Optimizer,
+    num_warmup_steps: int,
+    num_training_steps: int,
+    last_epoch: int = -1
+):
+    """
+    Mark's implementation of cosine schedule with warmup.
+    Create a schedule with a learning rate that decreases following the values of the
+    cosine function between the initial lr set in the optimizer to 0, after a warmup period
+    during which it increases linearly between 0 and the initial lr set in the optimizer.
+
+    Args:
+        optimizer -> torch.optim.Optimizer:
+            The optimizer for which to schedule the learning rate.
+        num_warmup_steps -> int:
+            The number of steps for the warmup phase.
+        num_training_steps -> int:
+            The total number of training steps.
+        last_epoch -> int:
+            The index of the last epoch when resuming training. Defaults to -1.
+
+    Return:
+        `torch.optim.lr_scheduler.LambdaLR` with the appropriate schedule.
+    """
+
+    def lr_lambda(current_step):
+        if current_step < num_warmup_steps:
+            return float(current_step) / float(max(1, num_warmup_steps))
+        progress = float(current_step - num_warmup_steps) / \
+            float(max(1, num_training_steps - num_warmup_steps))
+        return max(0.0, 0.5 * (1.0 + math.cos(math.pi * progress)))
+
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch)
+
