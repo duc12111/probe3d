@@ -38,14 +38,14 @@ from torch.distributed import destroy_process_group, init_process_group
 
 from torch.nn.functional import interpolate
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.optim.lr_scheduler import LambdaLR
+from torch.optim.lr_scheduler import LambdaLR, ConstantLR
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 
 from evals.datasets.builder import build_loader
-from evals.utils.losses import DepthLoss, L1Loss
+from evals.utils.losses import DepthLoss, DepthLossV2, DepthSigLoss, L1LogLoss, L1Loss
 from evals.utils.metrics import evaluate_depth, match_scale_and_shift
-from evals.utils.optim import cosine_decay_linear_warmup, linear_decay_lr
+from evals.utils.optim import cosine_decay_linear_warmup, get_cosine_schedule_with_warmup_LambdaLR, linear_decay_lr
 
 
 def ddp_setup(rank: int, world_size: int, port: int):
@@ -238,15 +238,17 @@ def train_model(rank, world_size, cfg):
     ]
 
     # define exp_name
-    exp_name = "_".join([timestamp] + model_info + probe_info + train_info)
+    exp_name = "_".join([timestamp] + model_info + probe_info + train_info + [cfg.loss] + [cfg.scheduler])
     exp_name = f"{exp_name}_{cfg.note}" if cfg.note != "" else exp_name
     exp_name = exp_name.replace(" ", "")  # remove spaces
 
     # ===== SETUP LOGGING =====
-    writer = SummaryWriter(f'logdir/L1Loss/{exp_name}')
+    log_path = cfg.log_path
+    writer = SummaryWriter(f'{log_path}/{exp_name}')
+    print('writer to logdir', writer.get_logdir())
 
     if rank == 0:
-        exp_path = Path(__file__).parent / f"depth_exps/{exp_name}"
+        exp_path = Path(__file__).parent / f"{log_path}/{exp_name}"
         exp_path.mkdir(parents=True, exist_ok=True)
         logger.add(exp_path / "training.log")
         logger.info(f"Config: \n {OmegaConf.to_yaml(cfg)}")
@@ -278,13 +280,8 @@ def train_model(rank, world_size, cfg):
             ]
         )
 
-    lambda_fn = lambda epoch: linear_decay_lr(  # noqa: E731
-        epoch,
-        cfg.optimizer.n_epochs * len(trainval_loader),
-        cfg.optimizer.warmup_epochs * len(trainval_loader),
-    )
-    scheduler = LambdaLR(optimizer, lr_lambda=lambda_fn)
-    loss_fn = L1Loss()
+    scheduler = get_scheduler(cfg, trainval_loader, optimizer)
+    loss_fn = get_loss_function(cfg)
 
     train(
         model,
@@ -337,6 +334,44 @@ def train_model(rank, world_size, cfg):
 
     if world_size > 1:
         destroy_process_group()
+
+def get_scheduler(cfg, trainval_loader, optimizer):
+    if cfg.scheduler == "original" or cfg.scheduler == "cosine":
+        lambda_fn = lambda epoch: cosine_decay_linear_warmup(  # noqa: E731
+        epoch,
+            cfg.optimizer.n_epochs * len(trainval_loader),
+            cfg.optimizer.warmup_epochs * len(trainval_loader),
+        )
+        return LambdaLR(optimizer, lr_lambda=lambda_fn)
+    elif cfg.scheduler == "linear":
+        lambda_fn = lambda epoch: linear_decay_lr(
+            epoch,
+            cfg.optimizer.n_epochs * len(trainval_loader),
+        )
+        return LambdaLR(optimizer, lr_lambda=lambda_fn)
+    elif cfg.scheduler == "cosine_v2":
+        return get_cosine_schedule_with_warmup_LambdaLR(optimizer, 
+                                                        cfg.optimizer.warmup_epochs * len(trainval_loader),
+                                                        cfg.optimizer.n_epochs * len(trainval_loader))
+    elif cfg.scheduler == "constant":
+        return ConstantLR(optimizer, factor=0.5, total_iters=4)
+    else:
+        raise ValueError(f"Scheduler {cfg.scheduler} not supported")
+
+
+def get_loss_function(cfg):
+    if cfg.loss == "" or cfg.loss == "DepthLoss":
+        return DepthLoss()
+    elif cfg.loss == "L1LogLoss":
+        return L1LogLoss()
+    elif cfg.loss == "DepthLossV2":
+        return DepthLossV2()
+    elif cfg.loss == "DepthSigLoss":
+        return DepthSigLoss()
+    elif cfg.loss == "L1Loss":
+        return L1Loss()
+    else:
+        raise ValueError(f"Loss {cfg.loss} not supported")
 
 
 @hydra.main(config_name="depth_training", config_path="./configs", version_base=None)

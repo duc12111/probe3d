@@ -38,7 +38,9 @@ from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim.lr_scheduler import LambdaLR
 from tqdm import tqdm
+from torch.utils.tensorboard import SummaryWriter
 
+from torch.nn.functional import interpolate
 from evals.datasets.builder import build_loader
 from evals.utils.losses import angular_loss
 from evals.utils.metrics import evaluate_surface_norm
@@ -68,6 +70,7 @@ def train(
     rank=0,
     world_size=1,
     valid_loader=None,
+    writer=None,
 ):
     for ep in range(n_epochs):
 
@@ -92,8 +95,13 @@ def train(
 
             else:
                 feats = model(images)
+
             pred = probe(feats)
             pred = F.interpolate(pred, size=target.shape[-2:], mode="bicubic")
+
+            if i % 100 ==0:
+                writer.add_image('LOSS/pred', pred[0] , ep * len(train_loader) + i)
+                writer.add_image('LOSS/gt', target[0] , ep * len(train_loader) + i)
 
             uncertainty = pred.shape[1] > 3
             loss = angular_loss(pred, target, mask, uncertainty_aware=uncertainty)
@@ -108,19 +116,26 @@ def train(
             if rank == 0:
                 _loss = train_loss / (i + 1)
                 pbar.set_description(f"{ep} | loss: {_loss:.4f} probe_lr: {pr_lr:.2e}")
+                if i % 100 == 0:
+                    writer.add_scalar(f'Loss', _loss, ep * len(train_loader) + i)
 
         train_loss /= len(train_loader)
 
         if rank == 0 and valid_loader is not None:
-            valid_loss, valid_metrics = validate(model, probe, valid_loader)
+            print('Evaluate:', len(valid_loader))
+            valid_loss, valid_metrics = validate(model, probe, valid_loader, writer=writer, epoch=ep)
             logger.info(f"Final valid loss       | {valid_loss:.4f}")
+            writer.add_scalar(f'Eval/loss', valid_loss, (ep + 1) * len(train_loader))
             for metric in valid_metrics:
                 logger.info(f"Final valid {metric:10s} | {valid_metrics[metric]:.4f}")
+                writer.add_scalar(f'Eval/{metric}', valid_metrics[metric], (ep + 1) * len(train_loader))
 
 
-def validate(model, probe, loader, verbose=True, aggregate=True):
+def validate(model, probe, loader, verbose=True, aggregate=True, writer=None, epoch=0):
     total_loss = 0.0
     metrics = None
+    iteration = epoch * len(loader)
+
     with torch.inference_mode():
         pbar = tqdm(loader, desc="Evaluation") if verbose else loader
         for batch in pbar:
@@ -129,8 +144,13 @@ def validate(model, probe, loader, verbose=True, aggregate=True):
             target = batch["snorm"].cuda()
 
             feats = model(images)
+            feats = interpolate(feats, (120,120), mode="bilinear")
             pred = probe(feats)
             pred = F.interpolate(pred, size=target.shape[-2:], mode="bicubic")
+
+            writer.add_image('EVAL/pred', pred[0], iteration)
+            writer.add_image('EVAL/gt', target[0], iteration)
+            iteration += 1
 
             uncertainty = pred.shape[1] > 3
             loss = angular_loss(pred, target, mask, uncertainty_aware=uncertainty)
@@ -194,6 +214,8 @@ def train_model(rank, world_size, cfg):
     exp_name = exp_name.replace(" ", "")  # remove spaces
 
     # ===== SETUP LOGGING =====
+    writer = SummaryWriter(f'linear_normals/{exp_name}')
+
     if rank == 0:
         exp_path = Path(__file__).parent / f"snorm_exps/{exp_name}"
         exp_path.mkdir(parents=True, exist_ok=True)
@@ -243,13 +265,14 @@ def train_model(rank, world_size, cfg):
         detach_model=(cfg.optimizer.model_lr == 0),
         rank=rank,
         world_size=world_size,
-        # valid_loader=test_loader,
+        valid_loader=test_loader,
+        writer=writer,
     )
 
     if rank == 0:
         logger.info(f"Evaluating on test split of {test_dset}")
 
-        test_loss, test_metrics = validate(model, probe, test_loader)
+        test_loss, test_metrics = validate(model, probe, test_loader, writer=writer, epoch=10*len(trainval_loader))
         logger.info(f"Final test loss       | {test_loss:.4f}")
         for metric in test_metrics:
             logger.info(f"Final test {metric:10s} | {test_metrics[metric]:.4f}")
@@ -268,8 +291,8 @@ def train_model(rank, world_size, cfg):
         ckpt_path = exp_path / "ckpt.pth"
         checkpoint = {
             "cfg": cfg,
-            "model": model.module.state_dict(),
-            "probe": probe.module.state_dict(),
+            "model": model.state_dict(),
+            "probe": probe.state_dict(),
         }
         torch.save(checkpoint, ckpt_path)
         logger.info(f"Saved checkpoint at {ckpt_path}")

@@ -5,6 +5,9 @@ system:
 note: ""
 batch_size: 8
 probe_from_checkpoint: ""
+loss: ""
+scheduler: "original"
+log_path : "logdir"
 defaults:
   - optimizer: ten_epoch
   - backbone: dinov2_b14
