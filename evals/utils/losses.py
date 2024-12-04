@@ -105,21 +105,33 @@ class L1Loss(nn.Module):
         self.max_depth = max_depth
 
     def forward(self, pred, target):
-        valid = ((target > 0) & (target < self.max_depth)).detach().float()
-        loss = torch.abs(pred - target)
-        loss = (loss * valid).sum(dim=(-1,-2))
-        print(loss)
-        return loss.mean(), {"l1_loss": loss.mean()}
+        mask = ((target > 0) & (target < self.max_depth)).detach().float()  
+        
+        assert mask.ndim == 4, f"mask should be (batch x height x width) not {mask.shape}"
+        mask = mask.squeeze(1).float()
 
-class L1LogLossV2(nn.Module):
+        assert pred.shape[1] == 1
+        loss = torch.nn.functional.l1_loss(pred, target, reduction="none")
+        loss = loss.mean(dim=1)
+
+        # compute loss over valid position
+        loss_mean = (loss*mask).mean()
+        print(f"mask: {mask.shape}, loss_mean: {loss_mean.shape}, loss: {(loss*mask).shape}")
+        if loss_mean != loss_mean:
+            breakpoint()
+        return loss_mean, {"l1_loss": loss_mean}
+
+class L1LogLoss(nn.Module):
     def __init__(self, max_depth=10):
         super().__init__()
         self.max_depth = max_depth
-
+        self.eps = 0.001
     def forward(self, pred, target):
-        valid = ((target > 0) & (target < self.max_depth)).detach().float()
-        loss = torch.abs(torch.log(pred) - torch.log(target))
-        loss = (loss * valid).sum(dim=(-1,-2))
+        valid = ((target > 0) & (target < self.max_depth)).detach().float()  
+        depth_pr_masked = pred * valid 
+        depth_gt_masked = target * valid
+        loss = torch.abs(torch.log(depth_pr_masked+ self.eps) - torch.log(depth_gt_masked+ self.eps))
+        loss = (loss * valid).mean(dim=(-1,-2))
         return loss.mean(), {"l1_loss": loss.mean()}
 
 class DepthLoss(nn.Module):
@@ -134,11 +146,33 @@ class DepthLoss(nn.Module):
         # 0 out max depth so it gets ignored
         target[target > self.max_depth] = 0
 
+        loss_s = self.sig_w * sig_loss(pred, target)
+        loss_g = self.grad_w * gradient_loss(pred, target)
+        loss = loss_s + loss_g
+        return loss, {"loss_s": loss_s, "loss_g": loss_g}
+
+class DepthLossV2(nn.Module):
+    def __init__(self, weight_sig=10.0, weight_grad=0.5, max_depth=10):
+        super().__init__()
+        self.sig_w = weight_sig
+        self.grad_w = weight_grad
+        self.max_depth = max_depth
+
+    def forward(self, pred, target):
         loss_s = self.sig_w * sig_loss_v2(pred, target)
         loss_g = self.grad_w * gradient_loss_v2(pred, target)
         loss = loss_s + loss_g
         return loss, {"loss_s": loss_s, "loss_g": loss_g}
 
+class DepthSigLoss(nn.Module):
+    def __init__(self, weight_sig=10.0, max_depth=10):
+        super().__init__()
+        self.sig_w = weight_sig
+        self.max_depth = max_depth
+
+    def forward(self, pred, target):
+        loss = self.sig_w * depth_si_loss(pred, target)
+        return loss, {"loss_s": loss}
 
 def gradient_loss(depth_pr, depth_gt, eps=0.001):
     """GradientLoss.
