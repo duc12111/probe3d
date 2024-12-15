@@ -37,12 +37,17 @@ class VideoMAE(nn.Module):
         patch_size = self.video_mae.config.patch_size
         self.patch_size = patch_size
         self.layer = layer
+        # TODO: check if we could avoid hard code
+        self.num_frames = 16
 
         self.image_size = self.video_mae.embeddings.patch_embeddings.image_size
+        self.tubelet_size = self.video_mae.embeddings.patch_embeddings.tubelet_size
         self.feat_h = self.image_size[0] // self.patch_size
         self.feat_w = self.image_size[1] // self.patch_size
 
-        feat_dim = self.video_mae.config.hidden_size
+        feat_dim = self.video_mae.config.hidden_size 
+        if self.output == "dense-temperal":
+            feat_dim = feat_dim * self.num_frames // self.tubelet_size
         num_layers = len(self.video_mae.encoder.layer)
         multilayers = [
             num_layers // 4 - 1,
@@ -98,7 +103,7 @@ class VideoMAE(nn.Module):
                             mode='bilinear',  # or 'bicubic', 'nearest', etc.
                             align_corners=False)
         images = resized_image.unsqueeze(1)  # inserts new dimension at index 2
-        images = images.expand(-1, 16, -1, -1, -1)  # [1,16,3,224,224]
+        images = images.expand(-1, self.num_frames, -1, -1, -1)  # [1,16,3,224,224]
 
         # ---- hidden ----
         embedding_output =  self.video_mae.embeddings(images,bool_masked_pos=None)
@@ -114,7 +119,8 @@ class VideoMAE(nn.Module):
         for layer_i in self.multilayers:
             x_i = encoder_outputs.hidden_states[layer_i]
             x_i = tokens_to_output(
-                self.output, x_i[:, :self.feat_h*self.feat_w], None, (self.feat_h, self.feat_w)
+                self.output, x_i if self.output == "dense-temperal" else x_i[:, :self.feat_h*self.feat_w],
+                None, (self.feat_h, self.feat_w)
             )
             outputs.append(x_i)
 
