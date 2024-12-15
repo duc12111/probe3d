@@ -43,7 +43,7 @@ from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 
 from evals.datasets.builder import build_loader
-from evals.utils.losses import DepthLoss, DepthLossV2, DepthSigLoss, L1LogLoss, L1Loss
+from evals.utils.losses import DepthLoss, DepthLossV2, DepthLossV3, DepthSigLoss, L1LogLoss, L1Loss
 from evals.utils.metrics import evaluate_depth, match_scale_and_shift
 from evals.utils.optim import cosine_decay_linear_warmup, get_cosine_schedule_with_warmup_LambdaLR, linear_decay_lr
 
@@ -84,7 +84,6 @@ def train(
         for i, batch in enumerate(pbar):
             images = batch["image"].to(rank)
             target = batch["depth"].to(rank)
-
             optimizer.zero_grad()
             if detach_model:
                 with torch.no_grad():
@@ -141,10 +140,14 @@ def train(
                 logger.info(f"valid loss {ep}   | {val_loss:.4f}")
                 writer.add_scalar(f'Eval/loss', val_loss, (ep + 1) * len(train_loader))
                 for metric in val_metrics:
-                    logger.info(f"valid SA {metric:10s} | {val_metrics[metric]:.4f}")
+                    logger.info(f"valid Scale Aware {metric:10s} | {val_metrics[metric]:.4f}")
                     writer.add_scalar(f'Eval/{metric}', val_metrics[metric], (ep+1) * len(train_loader))
-
-
+                _ , val_metrics = validate(
+                    model, probe, valid_loader, loss_fn, scale_invariant=True,writer=writer, epoch= ep
+                )
+                for metric in val_metrics:
+                    logger.info(f"valid Scale Invariant {metric:10s} | {val_metrics[metric]:.4f}")
+                    writer.add_scalar(f'Eval/{metric}', val_metrics[metric], (ep+1) * len(train_loader))
 
 def validate(
     model, probe, loader, loss_fn, verbose=True, scale_invariant=False, aggregate=True, writer=None, epoch=0
@@ -295,7 +298,8 @@ def train_model(rank, world_size, cfg):
         rank=rank,
         world_size=world_size,
         valid_loader=test_loader,
-        writer= writer
+        writer= writer,
+        scale_invariant=cfg.scale_invariant
     )
 
     if rank == 0:
@@ -347,6 +351,7 @@ def get_scheduler(cfg, trainval_loader, optimizer):
         lambda_fn = lambda epoch: linear_decay_lr(
             epoch,
             cfg.optimizer.n_epochs * len(trainval_loader),
+            cfg.optimizer.warmup_epochs * len(trainval_loader)
         )
         return LambdaLR(optimizer, lr_lambda=lambda_fn)
     elif cfg.scheduler == "cosine_v2":
@@ -360,12 +365,14 @@ def get_scheduler(cfg, trainval_loader, optimizer):
 
 
 def get_loss_function(cfg):
-    if cfg.loss == "" or cfg.loss == "DepthLoss":
+    if cfg.loss == "DepthLoss":
         return DepthLoss()
     elif cfg.loss == "L1LogLoss":
         return L1LogLoss()
     elif cfg.loss == "DepthLossV2":
         return DepthLossV2()
+    elif cfg.loss == "DepthLossV3":
+        return DepthLossV3()
     elif cfg.loss == "DepthSigLoss":
         return DepthSigLoss()
     elif cfg.loss == "L1Loss":

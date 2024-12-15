@@ -5,9 +5,10 @@ system:
 note: ""
 batch_size: 8
 probe_from_checkpoint: ""
-loss: ""
+loss: "DepthLoss"
 scheduler: "original"
 log_path : "logdir"
+scale_invariant: False
 defaults:
   - optimizer: ten_epoch
   - backbone: dinov2_b14
