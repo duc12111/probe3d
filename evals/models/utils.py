@@ -112,6 +112,12 @@ def tokens_to_output(output_type, dense_tokens, cls_token, feat_hw):
         h, w = feat_hw
         dense_tokens = E.rearrange(dense_tokens, "b (h w) c -> b c h w", h=h, w=w)
         output = dense_tokens.contiguous()
+    elif output_type == "dense-temperal":
+        h, w = feat_hw
+        assert dense_tokens.shape[1] % (h * w) == 0
+        t = dense_tokens.shape[1] // (h * w)
+        dense_tokens = E.rearrange(dense_tokens, "b (t h w) c -> b (c t) h w", t=t, h=h, w=w)
+        output = dense_tokens.contiguous()
     elif output_type == "dense-cls":
         assert cls_token is not None
         h, w = feat_hw
