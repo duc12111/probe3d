@@ -41,9 +41,9 @@ from torch.utils.tensorboard import SummaryWriter
 
 from torch.nn.functional import interpolate
 from evals.datasets.builder import build_loader
-from evals.utils.losses import angular_loss
+from evals.utils.losses import angular_loss, snorm_l1_loss
 from evals.utils.metrics import evaluate_surface_norm
-from evals.utils.optim import cosine_decay_linear_warmup, get_scheduler
+from evals.utils.optim import get_scheduler
 
 
 def ddp_setup(rank: int, world_size: int, port: int = 12355):
@@ -62,6 +62,7 @@ def train(
     model,
     probe,
     train_loader,
+    loss_fn,
     optimizer,
     scheduler,
     n_epochs,
@@ -103,7 +104,7 @@ def train(
                 writer.add_image('LOSS/gt', target[0] , ep * len(train_loader) + i)
 
             uncertainty = pred.shape[1] > 3
-            loss = angular_loss(pred, target, mask, uncertainty_aware=uncertainty)
+            loss = loss_fn(pred, target, mask)
             loss.backward()
             optimizer.step()
             scheduler.step()
@@ -124,7 +125,7 @@ def train(
 
         if rank == 0 and valid_loader is not None:
             print('Evaluate:', len(valid_loader))
-            valid_loss, valid_metrics = validate(model, probe, valid_loader, writer=writer, epoch=ep)
+            valid_loss, valid_metrics = validate(model, probe, valid_loader, loss_fn, writer=writer, epoch=ep)
             logger.info(f"Final valid loss       | {valid_loss:.4f}")
             writer.add_scalar(f'Eval/loss', valid_loss, (ep + 1) * len(train_loader))
             for metric in valid_metrics:
@@ -132,7 +133,7 @@ def train(
                 writer.add_scalar(f'Eval/{metric}', valid_metrics[metric], (ep + 1) * len(train_loader))
 
 
-def validate(model, probe, loader, verbose=True, aggregate=True, writer=None, epoch=0):
+def validate(model, probe, loader, loss_fn, verbose=True, aggregate=True, writer=None, epoch=0):
     total_loss = 0.0
     metrics = None
     iteration = epoch * len(loader)
@@ -153,8 +154,7 @@ def validate(model, probe, loader, verbose=True, aggregate=True, writer=None, ep
             writer.add_image('EVAL/gt', target[0], iteration)
             iteration += 1
 
-            uncertainty = pred.shape[1] > 3
-            loss = angular_loss(pred, target, mask, uncertainty_aware=uncertainty)
+            loss = loss_fn(pred, target, mask)
 
             total_loss += loss.item()
             batch_metrics = evaluate_surface_norm(pred.detach(), target, mask)
@@ -253,11 +253,13 @@ def train_model(rank, world_size, cfg):
         )
 
     scheduler = get_scheduler(cfg, trainval_loader, optimizer)
+    loss_fn = get_loss_fn(cfg.loss)
 
     train(
         model,
         probe,
         trainval_loader,
+        loss_fn,
         optimizer,
         scheduler,
         cfg.optimizer.n_epochs,
@@ -271,7 +273,7 @@ def train_model(rank, world_size, cfg):
     if rank == 0:
         logger.info(f"Evaluating on test split of {test_dset}")
 
-        test_loss, test_metrics = validate(model, probe, test_loader, writer=writer, epoch=10*len(trainval_loader))
+        test_loss, test_metrics = validate(model, probe, test_loader, loss_fn, writer=writer, epoch=10*len(trainval_loader))
         logger.info(f"Final test loss       | {test_loss:.4f}")
         for metric in test_metrics:
             logger.info(f"Final test {metric:10s} | {test_metrics[metric]:.4f}")
@@ -298,6 +300,14 @@ def train_model(rank, world_size, cfg):
 
     if world_size > 1:
         destroy_process_group()
+
+def get_loss_fn(loss_name:str):
+    if loss_name == "angular_loss":
+        return lambda pred, target, mask: angular_loss(pred, target, mask, uncertainty_aware=pred.shape[1] > 3)
+    elif loss_name == "l1_loss":
+        return lambda pred, target, mask: snorm_l1_loss(pred, target, mask)
+    else:
+        raise ValueError(f"Loss {loss_name} not supported")
 
 
 @hydra.main(config_name="snorm_training", config_path="./configs", version_base=None)

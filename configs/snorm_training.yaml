@@ -5,6 +5,7 @@ system:
 note: ""
 scheduler: "original"
 log_path : "logdir"
+loss: "angular_loss"
 batch_size: 8
 defaults:
   - optimizer: ten_epoch
