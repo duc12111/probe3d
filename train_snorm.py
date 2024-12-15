@@ -36,7 +36,6 @@ from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.optim.lr_scheduler import LambdaLR
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 
@@ -44,7 +43,7 @@ from torch.nn.functional import interpolate
 from evals.datasets.builder import build_loader
 from evals.utils.losses import angular_loss
 from evals.utils.metrics import evaluate_surface_norm
-from evals.utils.optim import cosine_decay_linear_warmup
+from evals.utils.optim import cosine_decay_linear_warmup, get_scheduler
 
 
 def ddp_setup(rank: int, world_size: int, port: int = 12355):
@@ -117,7 +116,9 @@ def train(
                 _loss = train_loss / (i + 1)
                 pbar.set_description(f"{ep} | loss: {_loss:.4f} probe_lr: {pr_lr:.2e}")
                 if i % 100 == 0:
-                    writer.add_scalar(f'Loss', _loss, ep * len(train_loader) + i)
+                    writer.add_scalar(f'Accumulated Loss', _loss, ep * len(train_loader) + i)
+                    writer.add_scalar(f'Loss', loss, ep * len(train_loader) + i)
+                    writer.add_scalar(f'Probe LR', pr_lr, ep * len(train_loader) + i)
 
         train_loss /= len(train_loader)
 
@@ -209,13 +210,16 @@ def train_model(rank, world_size, cfg):
         f"{test_dset:10s}",
     ]
     # define exp_name
-    exp_name = "_".join([timestamp] + model_info + probe_info + train_info)
+    exp_name = "_".join([timestamp] + model_info + probe_info + train_info +  [cfg.scheduler])
     exp_name = f"{exp_name}_{cfg.note}" if cfg.note != "" else exp_name
     exp_name = exp_name.replace(" ", "")  # remove spaces
 
-    # ===== SETUP LOGGING =====
-    writer = SummaryWriter(f'linear_normals/{exp_name}')
 
+    # ===== SETUP LOGGING =====
+    log_path = cfg.log_path
+    writer = SummaryWriter(f'{log_path}/{exp_name}')
+    print('writer to logdir', writer.get_logdir())
+    
     if rank == 0:
         exp_path = Path(__file__).parent / f"snorm_exps/{exp_name}"
         exp_path.mkdir(parents=True, exist_ok=True)
@@ -248,12 +252,7 @@ def train_model(rank, world_size, cfg):
             ]
         )
 
-    lambda_fn = lambda epoch: cosine_decay_linear_warmup(
-        epoch,
-        cfg.optimizer.n_epochs * len(trainval_loader),
-        cfg.optimizer.warmup_epochs * len(trainval_loader),
-    )
-    scheduler = LambdaLR(optimizer, lr_lambda=lambda_fn)
+    scheduler = get_scheduler(cfg, trainval_loader, optimizer)
 
     train(
         model,
@@ -291,8 +290,8 @@ def train_model(rank, world_size, cfg):
         ckpt_path = exp_path / "ckpt.pth"
         checkpoint = {
             "cfg": cfg,
-            "model": model.state_dict(),
-            "probe": probe.state_dict(),
+            "model": model.state_dict() if not isinstance(model, DDP) else model.module.state_dict(),
+            "probe": probe.state_dict() if not isinstance(probe, DDP) else probe.module.state_dict(),
         }
         torch.save(checkpoint, ckpt_path)
         logger.info(f"Saved checkpoint at {ckpt_path}")

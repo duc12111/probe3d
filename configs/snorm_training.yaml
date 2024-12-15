@@ -3,6 +3,8 @@ system:
   num_gpus: 1
   port: 12355
 note: ""
+scheduler: "original"
+log_path : "logdir"
 batch_size: 8
 defaults:
   - optimizer: ten_epoch

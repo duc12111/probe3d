@@ -26,6 +26,8 @@ import math
 
 import numpy as np
 import torch
+from torch.optim.lr_scheduler import LambdaLR
+
 
 
 def set_weight_decay_per_param(
@@ -174,3 +176,26 @@ def get_cosine_schedule_with_warmup_LambdaLR(
 
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch)
 
+def get_scheduler(cfg, trainval_loader, optimizer):
+    if cfg.scheduler == "original" or cfg.scheduler == "cosine":
+        lambda_fn = lambda epoch: cosine_decay_linear_warmup(  # noqa: E731
+        epoch,
+            cfg.optimizer.n_epochs * len(trainval_loader),
+            cfg.optimizer.warmup_epochs * len(trainval_loader),
+        )
+        return LambdaLR(optimizer, lr_lambda=lambda_fn)
+    elif cfg.scheduler == "linear":
+        lambda_fn = lambda epoch: linear_decay_lr(
+            epoch,
+            cfg.optimizer.n_epochs * len(trainval_loader),
+            cfg.optimizer.warmup_epochs * len(trainval_loader)
+        )
+        return LambdaLR(optimizer, lr_lambda=lambda_fn)
+    elif cfg.scheduler == "cosine_v2":
+        return get_cosine_schedule_with_warmup_LambdaLR(optimizer, 
+                                                        cfg.optimizer.warmup_epochs * len(trainval_loader),
+                                                        cfg.optimizer.n_epochs * len(trainval_loader))
+    elif cfg.scheduler == "constant":
+        return ConstantLR(optimizer, factor=0.5, total_iters=4)
+    else:
+        raise ValueError(f"Scheduler {cfg.scheduler} not supported")

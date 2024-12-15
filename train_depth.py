@@ -45,7 +45,7 @@ from torch.utils.tensorboard import SummaryWriter
 from evals.datasets.builder import build_loader
 from evals.utils.losses import DepthLoss, DepthLossV2, DepthLossV3, DepthSigLoss, L1LogLoss, L1Loss
 from evals.utils.metrics import evaluate_depth, match_scale_and_shift
-from evals.utils.optim import cosine_decay_linear_warmup, get_cosine_schedule_with_warmup_LambdaLR, linear_decay_lr
+from evals.utils.optim import cosine_decay_linear_warmup, get_cosine_schedule_with_warmup_LambdaLR, get_scheduler, linear_decay_lr
 
 
 def ddp_setup(rank: int, world_size: int, port: int):
@@ -338,31 +338,6 @@ def train_model(rank, world_size, cfg):
 
     if world_size > 1:
         destroy_process_group()
-
-def get_scheduler(cfg, trainval_loader, optimizer):
-    if cfg.scheduler == "original" or cfg.scheduler == "cosine":
-        lambda_fn = lambda epoch: cosine_decay_linear_warmup(  # noqa: E731
-        epoch,
-            cfg.optimizer.n_epochs * len(trainval_loader),
-            cfg.optimizer.warmup_epochs * len(trainval_loader),
-        )
-        return LambdaLR(optimizer, lr_lambda=lambda_fn)
-    elif cfg.scheduler == "linear":
-        lambda_fn = lambda epoch: linear_decay_lr(
-            epoch,
-            cfg.optimizer.n_epochs * len(trainval_loader),
-            cfg.optimizer.warmup_epochs * len(trainval_loader)
-        )
-        return LambdaLR(optimizer, lr_lambda=lambda_fn)
-    elif cfg.scheduler == "cosine_v2":
-        return get_cosine_schedule_with_warmup_LambdaLR(optimizer, 
-                                                        cfg.optimizer.warmup_epochs * len(trainval_loader),
-                                                        cfg.optimizer.n_epochs * len(trainval_loader))
-    elif cfg.scheduler == "constant":
-        return ConstantLR(optimizer, factor=0.5, total_iters=4)
-    else:
-        raise ValueError(f"Scheduler {cfg.scheduler} not supported")
-
 
 def get_loss_function(cfg):
     if cfg.loss == "DepthLoss":
