@@ -317,7 +317,9 @@ def snorm_l1_loss(snorm_pr, snorm_gt, mask, eps=1e-4):
     assert mask.ndim == 4, f"mask should be (batch x height x width) not {mask.shape}"
     mask = mask.squeeze(1).float()
 
-    assert snorm_pr.shape[1] == 3
+    if snorm_pr.shape[1] == 4:
+        snorm_pr = snorm_pr[:, :3]
+    assert snorm_pr.shape[1] == 3, f"snorm_pr should be (batch x 3 x height x width) not {snorm_pr.shape}"
     loss = torch.nn.functional.l1_loss(snorm_pr, snorm_gt, reduction="none")
     loss = loss.mean(dim=1)
 
