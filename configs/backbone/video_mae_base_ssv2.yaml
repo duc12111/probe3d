@@ -1,0 +1,4 @@
+_target_: evals.models.video_mae.VideoMAE
+checkpoint: "MCG-NJU/videomae-base-ssv2"
+output: dense-temperal
+layer: -1

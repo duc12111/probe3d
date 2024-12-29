@@ -1,0 +1,4 @@
+_target_: evals.models.video_mae.VideoMAE
+checkpoint: "bisnusarkar039/videomae-base-pretrain-ucf101-subset"
+output: dense-temperal
+layer: -1
