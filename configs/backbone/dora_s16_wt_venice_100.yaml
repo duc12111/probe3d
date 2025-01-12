@@ -1,0 +1,4 @@
+_target_: evals.models.dora.DoRA
+arch: vit_s16_wt_venice_100
+output: dense
+layer: -1

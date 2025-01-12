@@ -1,0 +1,5 @@
+
+_target_: evals.models.ijepa.IJEPA
+checkpoint: facebook/ijepa_vith16_1k
+output: dense
+layer: -1

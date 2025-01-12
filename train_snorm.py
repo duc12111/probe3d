@@ -103,7 +103,6 @@ def train(
                 writer.add_image('LOSS/pred', pred[0] , ep * len(train_loader) + i)
                 writer.add_image('LOSS/gt', target[0] , ep * len(train_loader) + i)
 
-            uncertainty = pred.shape[1] > 3
             loss = loss_fn(pred, target, mask)
             loss.backward()
             optimizer.step()
@@ -146,7 +145,7 @@ def validate(model, probe, loader, loss_fn, verbose=True, aggregate=True, writer
             target = batch["snorm"].cuda()
 
             feats = model(images)
-            feats = interpolate(feats, (120,120), mode="bilinear")
+            # feats = interpolate(feats, (120,120), mode="bilinear")
             pred = probe(feats)
             pred = F.interpolate(pred, size=target.shape[-2:], mode="bicubic")
 
