@@ -1,0 +1,4 @@
+_target_: evals.models.vjepa.VJEPA
+arch: vit_huge
+output: dense
+layer: -1

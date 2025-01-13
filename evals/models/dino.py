@@ -14,6 +14,7 @@ class DINO(torch.nn.Module):
     ):
         super().__init__()
         feat_dims = {
+            "vits16": 384,
             "vitb8": 768,
             "vitb16": 768,
             "vitb14": 768,
