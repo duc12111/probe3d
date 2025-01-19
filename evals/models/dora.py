@@ -8,10 +8,10 @@ from .utils import center_padding, tokens_to_output
 
 
 class DoRA(torch.nn.Module):
-    def __init__(self, arch="vit_s16_wt_venice_100",output="dense",layer=-1, return_multilayer=False):
+    def __init__(self, arch="vit_s16_wt_venice_100",output="dense-cls",layer=-1, return_multilayer=False):
         super().__init__()
         #TODO: check if support dense-cls
-        assert output in ["gap", "dense"], "Options: [gap, dense]"
+        assert output in ["dense-cls", "dense"], "Options: [dense-cls, dense]"
         self.output = output
         self.checkpoint_name = f"dora_{arch}"
         ckpt_paths = {
@@ -27,7 +27,7 @@ class DoRA(torch.nn.Module):
         for p in self.vit.parameters():
             p.requires_grad = False
 
-        feat_dim = self.vit.embed_dim
+        feat_dim = self.vit.embed_dim * 2 if output == "dense-cls" else self.vit.embed_dim
         self.patch_size = self.vit.patch_size
         self.image_size = [self.vit.patch_embed.img_size, self.vit.patch_embed.img_size]
         assert self.patch_size == 16
@@ -57,14 +57,13 @@ class DoRA(torch.nn.Module):
         h, w = images.shape[-2:]
         h, w = h // self.patch_size, w // self.patch_size
 
-
         x = self.vit.prepare_tokens(images)
 
         embeds = []
         for i, blk in enumerate(self.vit.blocks):
             x,att,query,key = blk(x)
             if i in self.multilayers:
-                embeds.append(x)
+                embeds.append(self.vit.norm(x))
                 if len(embeds) == len(self.multilayers):
                     break
 
@@ -250,7 +249,7 @@ class VisionTransformer(torch.nn.Module):
         assert int(w0) == patch_pos_embed.shape[-2] and int(h0) == patch_pos_embed.shape[-1]
         patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).view(1, -1, dim)
         return torch.cat((class_pos_embed.unsqueeze(0), patch_pos_embed), dim=1)
-
+    
     def prepare_tokens(self, x):
         B, nc, w, h = x.shape
         
@@ -264,7 +263,7 @@ class VisionTransformer(torch.nn.Module):
         x = x + self.interpolate_pos_encoding(x, w, h)
 
         return self.pos_drop(x)
-
+    
     def forward(self, x):
         x = self.prepare_tokens(x)
         for blk in self.blocks:

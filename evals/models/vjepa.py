@@ -76,13 +76,13 @@ class VJEPA(nn.Module):
         x = self.vit.patch_embed(images)
         if pos_embed is not None:
             x += pos_embed
-        B, N, D = x.shape
+        B, N, D = x.shape        
 
         embeds = []
         for i, blk in enumerate(self.vit.blocks):
             x = blk(x)
             if i in self.multilayers:
-                embeds.append(x)
+                embeds.append(self.vit.norm(x))
                 if len(embeds) == len(self.multilayers):
                     break
 
