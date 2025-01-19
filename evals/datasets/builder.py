@@ -22,6 +22,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 import os
+import numpy as np
+import random
 
 import torch
 from hydra.utils import instantiate
@@ -33,8 +35,13 @@ from torch.utils.data.distributed import DistributedSampler
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 torch.multiprocessing.set_sharing_strategy("file_system")
 
+def set_seed(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
 
-def build_loader(cfg, split, batch_size, num_gpus=1, **kwargs):
+def build_loader(cfg, split, batch_size, num_gpus=1, random_seed=8, **kwargs):
     """
     Build a PyTorch dataloader and the underlying dataset (using config).
     """
@@ -54,5 +61,6 @@ def build_loader(cfg, split, batch_size, num_gpus=1, **kwargs):
         pin_memory=True,
         shuffle=shuffle,
         sampler=sampler,
+        worker_init_fn= lambda id: set_seed(id + random_seed)
     )
     return loader
