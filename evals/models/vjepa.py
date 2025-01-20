@@ -6,6 +6,8 @@ from torch import nn
 from .utils import center_padding, tokens_to_output
 import logging
 import numpy as np
+import torch.nn.functional as F
+
 
 VIT_EMBED_DIMS = {
     'vit_tiny': 192,
@@ -23,24 +25,32 @@ logger = logging.getLogger()
 class VJEPA(nn.Module):
     def __init__(self, arch="vit_large",output="dense",layer=-1, return_multilayer=False):
         super().__init__()
-        #TODO: check if support dense-cls
-        assert output in ["gap", "dense"], "Options: [gap, dense]"
+        assert output in ["dense","dense-temperal"], "Options: [dense, dense-temperal]"
         self.output = output
         self.checkpoint_name = f"vjepa_{arch}"
         ckpt_paths = {
             "vit_large": "checkpoint_vjepa_vitl16_videomix2m.pth",
             "vit_huge": "checkpoint_vjepa_vith16_videomix2m.pth",
         }
+        assert arch in ckpt_paths, "arch not supported"
 
         ckpt_file = ckpt_paths[arch]
         ckpt_path = Path(__file__).parent / "checkpoint_weights" / ckpt_file
-        self.vit = vit_large()
+        # num_frames and tubelet_size are config from training weights
+        if arch == "vit_large":
+            self.vit = vit_large(num_frames=16,tubelet_size=2)
+        elif arch == "vit_huge":
+            self.vit = vit_huge(num_frames=16,tubelet_size=2)
         load_pretrained(self.vit, ckpt_path)
         self.vit.eval()
         for p in self.vit.parameters():
             p.requires_grad = False
 
+        self.num_frames = self.vit.num_frames
+        self.tubelet_size = self.vit.tubelet_size
         feat_dim = self.vit.embed_dim
+        if self.output == "dense-temperal":
+            feat_dim = feat_dim * self.num_frames // self.tubelet_size
         self.patch_size = self.vit.patch_size
         self.image_size = [self.vit.input_size, self.vit.input_size]
         assert self.patch_size == 16
@@ -65,10 +75,16 @@ class VJEPA(nn.Module):
         self.layer = "-".join(str(_x) for _x in self.multilayers)
     
     def forward(self, images):
+        resized_image = F.interpolate(images, 
+                    size=(self.image_size[0], self.image_size[1]),  # tuple of (H, W)
+                    mode='bilinear',  # or 'bicubic', 'nearest', etc.
+                    align_corners=False)
         # pad images (if needed) to ensure it matches patch_size
-        images = center_padding(images, self.patch_size)
+        images = center_padding(resized_image, self.patch_size)
         h, w = images.shape[-2:]
         h, w = h // self.patch_size, w // self.patch_size
+        images = images.unsqueeze(2)  # inserts new dimension at index 2
+        images = images.expand(-1, -1, self.num_frames, -1, -1)  # [B,C,T,H,W] example [B,3,16,224,224]
 
         pos_embed = self.vit.pos_embed
         if pos_embed is not None:
@@ -92,7 +108,10 @@ class VJEPA(nn.Module):
             cls_tok = x_i[:, 0]
             # ignoring register tokens
             spatial = x_i[:, -1 * num_spatial :]
-            x_i = tokens_to_output(self.output, spatial, cls_tok, (h, w))
+            x_i = tokens_to_output(
+                self.output, x_i if self.output == "dense-temperal" else x_i[:, :h*w],
+                None, (h, w)
+            )
             outputs.append(x_i)
 
         return outputs[0] if len(outputs) == 1 else outputs

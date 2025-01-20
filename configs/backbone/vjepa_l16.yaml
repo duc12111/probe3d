@@ -1,4 +1,4 @@
 _target_: evals.models.vjepa.VJEPA
 arch: vit_large
-output: dense
+output: dense-temperal
 layer: -1
