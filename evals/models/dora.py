@@ -18,6 +18,7 @@ class DoRA(torch.nn.Module):
             "vit_s16_wt_venice_100": "checkpoint_dora_wt_venice_100.pth",
             "dino_vit_s16_wt_venice_100": "checkpoint_dino_wt_venice_100.pth",
         }
+        assert arch in ckpt_paths, "arch not supported"
 
         ckpt_file = ckpt_paths[arch]
         ckpt_path = Path(__file__).parent / "checkpoint_weights" / ckpt_file

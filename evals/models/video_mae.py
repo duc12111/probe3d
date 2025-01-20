@@ -4,7 +4,6 @@ import numpy as np
 import torch
 from torch import nn
 from transformers import VideoMAEForPreTraining
-from transformers import ViTMAEForPreTraining
 import torch.nn.functional as F
 
 
@@ -66,22 +65,6 @@ class VideoMAE(nn.Module):
 
         # define layer name (for logging)
         self.layer = "-".join(str(_x) for _x in self.multilayers)
-
-    # def resize_pos_embed(self, image_size):
-    #     assert image_size[0] % self.patch_size == 0
-    #     assert image_size[1] % self.patch_size == 0
-    #     self.feat_h = image_size[0] // self.patch_size
-    #     self.feat_w = image_size[1] // self.patch_size
-    #     self.video_mae.embeddings.patch_embeddings.image_size = image_size
-    #     pos_embed = get_sinusoid_encoding_table(
-    #         self.video_mae.embeddings.num_patches, self.video_mae.config.hidden_size
-    #     )
-    #     # there should be an easier way ... TODO
-    #     device = self.video_mae.embeddings.patch_embeddings.projection.weight.device
-    #     self.video_mae.embeddings.position_embeddings = nn.Parameter(
-    #         torch.from_numpy(pos_embed).float().unsqueeze(0).to(device=device),
-    #         requires_grad=False,
-    #     )
     
     def get_sinusoid_encoding_table(n_position, d_hid):
         """Sinusoid position encoding table"""
@@ -103,7 +86,7 @@ class VideoMAE(nn.Module):
                             mode='bilinear',  # or 'bicubic', 'nearest', etc.
                             align_corners=False)
         images = resized_image.unsqueeze(1)  # inserts new dimension at index 2
-        images = images.expand(-1, self.num_frames, -1, -1, -1)  # [1,16,3,224,224]
+        images = images.expand(-1, self.num_frames, -1, -1, -1)  # [B,N,C,H,W] expand to [B,16,3,224,224]
 
         # ---- hidden ----
         embedding_output =  self.video_mae.embeddings(images,bool_masked_pos=None)
