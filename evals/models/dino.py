@@ -72,7 +72,7 @@ class DINO(torch.nn.Module):
         for i, blk in enumerate(self.vit.blocks):
             x = blk(x)
             if i in self.multilayers:
-                embeds.append(x)
+                embeds.append(self.vit.norm(x))
                 if len(embeds) == len(self.multilayers):
                     break
 
