@@ -46,7 +46,7 @@ class VJEPA(nn.Module):
         for p in self.vit.parameters():
             p.requires_grad = False
 
-        self.num_frames = self.vit.num_frames
+        self.num_frames = self.vit.tubelet_size
         self.tubelet_size = self.vit.tubelet_size
         feat_dim = self.vit.embed_dim
         if self.output == "dense-temperal":
@@ -75,12 +75,8 @@ class VJEPA(nn.Module):
         self.layer = "-".join(str(_x) for _x in self.multilayers)
     
     def forward(self, images):
-        resized_image = F.interpolate(images, 
-                    size=(self.image_size[0], self.image_size[1]),  # tuple of (H, W)
-                    mode='bilinear',  # or 'bicubic', 'nearest', etc.
-                    align_corners=False)
         # pad images (if needed) to ensure it matches patch_size
-        images = center_padding(resized_image, self.patch_size)
+        images = center_padding(images, self.patch_size)
         h, w = images.shape[-2:]
         h, w = h // self.patch_size, w // self.patch_size
         images = images.unsqueeze(2)  # inserts new dimension at index 2
