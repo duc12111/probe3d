@@ -36,13 +36,13 @@ class VideoMAE(nn.Module):
         patch_size = self.video_mae.config.patch_size
         self.patch_size = patch_size
         self.layer = layer
-        # TODO: check if we could avoid hard code
-        self.num_frames = 16
 
         self.image_size = self.video_mae.embeddings.patch_embeddings.image_size
         self.tubelet_size = self.video_mae.embeddings.patch_embeddings.tubelet_size
         self.feat_h = self.image_size[0] // self.patch_size
         self.feat_w = self.image_size[1] // self.patch_size
+
+        self.num_frames =  self.tubelet_size
 
         feat_dim = self.video_mae.config.hidden_size 
         if self.output == "dense-temperal":
@@ -81,11 +81,7 @@ class VideoMAE(nn.Module):
 
 
     def forward(self, images):
-        resized_image = F.interpolate(images, 
-                            size=(self.image_size[0], self.image_size[1]),  # tuple of (H, W)
-                            mode='bilinear',  # or 'bicubic', 'nearest', etc.
-                            align_corners=False)
-        images = resized_image.unsqueeze(1)  # inserts new dimension at index 2
+        images = images.unsqueeze(1)  # inserts new dimension at index 2
         images = images.expand(-1, self.num_frames, -1, -1, -1)  # [B,N,C,H,W] expand to [B,16,3,224,224]
 
         # ---- hidden ----
