@@ -2,6 +2,7 @@ outputs
 data
 depth_exps
 snorm_exps
+**/logdir
 
 
 # vim
