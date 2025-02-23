@@ -5,6 +5,7 @@ import torch
 from torch import nn
 from transformers import VideoMAEForPreTraining
 import torch.nn.functional as F
+from transformers.models.videomae.modeling_videomae import get_sinusoid_encoding_table
 
 
 
