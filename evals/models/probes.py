@@ -72,8 +72,8 @@ class DepthHead(nn.Module):
 
     def forward(self, feats):
         """Prediction each pixel."""
-        feats = self.head(feats)
-        depth = self.predict(feats)
+        x = self.head(feats)
+        depth = self.predict(x)
         return depth
 
 
