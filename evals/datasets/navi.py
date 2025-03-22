@@ -380,3 +380,40 @@ class NAVI(torch.utils.data.Dataset):
                     pair_dict[obj_id][col_id][img_id] = img_ids[pair_i]
 
         return pair_dict
+
+if __name__ == "__main__":
+    dataset = NAVI(
+        path="/storage/group/dataset_mirrors/01_incoming/probe3d_nyuv2_navi/navi_v1",
+        split="train",
+        augment_train=False,
+    )
+
+    print(len(dataset))
+    import torchvision
+    
+    # Get first item
+    sample = dataset[0]
+    
+    # Extract and visualize image, depth and surface normal
+    image = sample["image"] 
+    depth = sample["depth"]
+    snorm = sample["snorm"]
+    
+    # Normalize depth for visualization
+    depth_vis = depth.repeat(3, 1, 1) / depth.max()
+    
+    # Convert surface normals from [-1,1] to [0,1] range
+    snorm_vis = (snorm + 1.0) / 2.0
+    
+    # Concatenate horizontally for visualization
+    grid = torch.cat([
+        image,
+        depth_vis, 
+        snorm_vis
+    ], dim=2)
+    
+    print("Image shape:", image.shape)
+    print("Depth shape:", depth.shape) 
+    print("Surface normal shape:", snorm.shape)
+    
+    torchvision.utils.save_image(grid, "navi_sample.png")
