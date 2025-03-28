@@ -14,6 +14,7 @@ class MAE(nn.Module):
         output="dense",
         layer=-1,
         return_multilayer=False,
+        mode="original",
     ):
         """Code based on transformer database"""
         super().__init__()
@@ -55,34 +56,42 @@ class MAE(nn.Module):
 
         # define layer name (for logging)
         self.layer = "-".join(str(_x) for _x in self.multilayers)
+        assert mode in ["original", "resize"], f"Options: [original, resize] {mode}"
+        self.mode = mode
 
-    # def resize_pos_embed(self, image_size):
-    #     assert image_size[0] % self.patch_size == 0
-    #     assert image_size[1] % self.patch_size == 0
-    #     self.feat_h = image_size[0] // self.patch_size
-    #     self.feat_w = image_size[1] // self.patch_size
-    #     embed_dim = self.vit.config.hidden_size
-    #     self.vit.embeddings.patch_embeddings.image_size = image_size
-    #     pos_embed = get_2d_sincos_pos_embed(
-    #         embed_dim, (self.feat_h, self.feat_w), add_cls_token=True
-    #     )
-    #     # there should be an easier way ... TODO
-    #     device = self.vit.embeddings.patch_embeddings.projection.weight.device
-    #     self.vit.embeddings.position_embeddings = nn.Parameter(
-    #         torch.from_numpy(pos_embed).float().unsqueeze(0).to(device=device),
-    #         requires_grad=False,
-    #     )
+    def resize_pos_embed(self, image_size):
+        assert image_size[0] % self.patch_size == 0
+        assert image_size[1] % self.patch_size == 0
+        self.feat_h = image_size[0] // self.patch_size
+        self.feat_w = image_size[1] // self.patch_size
+        embed_dim = self.vit.config.hidden_size
+        self.vit.embeddings.patch_embeddings.image_size = image_size
+        pos_embed = get_2d_sincos_pos_embed(
+            embed_dim, (self.feat_h, self.feat_w), add_cls_token=True
+        )
+        # there should be an easier way ... TODO
+        device = self.vit.embeddings.patch_embeddings.projection.weight.device
+        self.vit.embeddings.position_embeddings = nn.Parameter(
+            torch.from_numpy(pos_embed).float().unsqueeze(0).to(device=device),
+            requires_grad=False,
+        )
 
-    def embed_forward(self, embedder, pixel_values):
+    def embed_forward(self, embedder, pixel_values, interpolate_pos_encoding=False):
         # No masking here ...
         batch_size, num_channels, height, width = pixel_values.shape
-        embeddings = embedder.patch_embeddings(pixel_values)
+        
+        embeddings = embedder.patch_embeddings(pixel_values, interpolate_pos_encoding=interpolate_pos_encoding)
+
+        if interpolate_pos_encoding:
+            position_embeddings = embedder.interpolate_pos_encoding(embeddings, height, width)
+        else:
+            position_embeddings = embedder.position_embeddings
 
         # add position embeddings w/o cls token
-        embeddings = embeddings + embedder.position_embeddings[:, 1:, :]
+        embeddings = embeddings + position_embeddings[:, 1:, :]
 
         # append cls token
-        cls_token = embedder.cls_token + embedder.position_embeddings[:, :1, :]
+        cls_token = embedder.cls_token + position_embeddings[:, :1, :]
         cls_tokens = cls_token.expand(embeddings.shape[0], -1, -1)
         embeddings = torch.cat((cls_tokens, embeddings), dim=1)
 
@@ -91,12 +100,23 @@ class MAE(nn.Module):
     def forward(self, images):
         # check if positional embeddings are correct
         if self.image_size != images.shape[-2:]:
-            images = torch.nn.functional.interpolate(images, size=self.image_size, mode="bilinear", align_corners=False)
+            if self.mode == "resize":
+                images = torch.nn.functional.interpolate(images, size=self.image_size, mode="bilinear", align_corners=False)
+                self.feat_h, self.feat_w = images.shape[-2] // self.patch_size, images.shape[-1] // self.patch_size
+
+            elif self.mode == "interpolate_pos_embed":
+                images = images
+                self.feat_h, self.feat_w = images.shape[-2] // self.patch_size, images.shape[-1] // self.patch_size
+            else:
+                self.resize_pos_embed(images.shape[-2:])
         # from MAE implementation
         head_mask = self.vit.get_head_mask(None, self.vit.config.num_hidden_layers)
         
         # ---- hidden ----
-        embedding_output = self.embed_forward(self.vit.embeddings, images)
+        if self.mode == "interpolate_pos_embed":
+            embedding_output = self.embed_forward(self.vit.embeddings, images, interpolate_pos_encoding=True)
+        else:
+            embedding_output = self.embed_forward(self.vit.embeddings, images)
         encoder_outputs = self.vit.encoder(
             embedding_output,
             head_mask=head_mask,

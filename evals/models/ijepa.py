@@ -1,8 +1,14 @@
 from transformers import IJepaModel
 import torch
 from .utils import center_padding, tokens_to_output
+import torch.nn.functional as F
 class IJEPA(torch.nn.Module):
-    def __init__(self, checkpoint="facebook/ijepa_vith16_1k",output="dense",layer=-1, return_multilayer=False):
+    def __init__(self, 
+                checkpoint="facebook/ijepa_vith16_1k",
+                output="dense",
+                layer=-1,
+                return_multilayer=False,
+                mode="original"):
         super().__init__()
         #TODO: check if support dense-cls
         assert output in ["gap", "dense"], "Options: [gap, dense]"
@@ -16,7 +22,6 @@ class IJEPA(torch.nn.Module):
         feat_dim = self.vit.config.hidden_size
         self.patch_size = self.vit.config.patch_size
         self.image_size = [self.vit.config.image_size, self.vit.config.image_size]
-        assert self.patch_size == 16
 
         num_layers = len(self.vit.encoder.layer)
         multilayers = [
@@ -36,8 +41,11 @@ class IJEPA(torch.nn.Module):
 
         # define layer name (for logging)
         self.layer = "-".join(str(_x) for _x in self.multilayers)
-
+        assert mode in ["original", "resize"], f"Options: [original, resize] {mode}"
+        self.mode = mode
     def forward(self, images):
+        if self.mode == "resize":
+            images = F.interpolate(images, size=(self.image_size[0], self.image_size[1]), mode="bilinear", align_corners=False)
         images = center_padding(images, self.patch_size)
         h, w = images.shape[-2:]
         h, w = h // self.patch_size, w // self.patch_size
