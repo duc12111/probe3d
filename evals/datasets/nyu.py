@@ -254,3 +254,43 @@ class NYU_geonet(torch.utils.data.Dataset):
         # collect instances based on correct coll
         insts = train_ins if split == "train" else valid_ins
         return insts
+
+if __name__ == "__main__":
+    import torchvision
+    dataset = NYU(
+        train_path="/storage/group/dataset_mirrors/01_incoming/probe3d_nyuv2_navi/nyu_geonet",
+        test_path="/storage/group/dataset_mirrors/01_incoming/probe3d_nyuv2_navi/nyuv2/nyuv2_snorm_all.pkl",
+        split="train",
+        augment_train=False,
+        center_crop=False,
+    )
+
+    print(len(dataset))
+    file_name = dataset.instances[0]
+    instance = scipy.io.loadmat(os.path.join(dataset.root_dir, file_name))
+    image = torch.tensor(instance["img"]).permute(2, 0, 1)
+    print(image.shape, image.min(), image.max())
+    image[0, :, :] = image[0, :, :] + 2 * 122.175
+    image[1, :, :] = image[1, :, :] + 2 * 116.169
+    image[2, :, :] = image[2, :, :] + 2 * 103.508
+
+    print(image.shape, image.min(), image.max())
+    image = image / 255.0
+    print(image.shape, image.min(), image.max())
+    depth = torch.tensor(instance["depth"]).unsqueeze(0)
+    snorm = torch.tensor(instance["norm"]).permute(2, 0, 1)
+    print(depth.shape, depth.min(), depth.max())
+    print(snorm.shape, snorm.min(), snorm.max())
+
+    image_vis = image
+    # Repeat depth to have 3 channels for concatenation
+    target_depth_vis = depth.repeat(3, 1, 1) / 10.0
+    target_snorm_vis = (snorm + 1.0) / 2.0
+
+    grid = torch.cat([
+            image_vis, 
+            target_depth_vis, 
+            target_snorm_vis, 
+        ], dim=2)  # Concatenate horizontally
+    print(grid.shape, grid.min(), grid.max())
+    torchvision.utils.save_image(grid, "test.png")
