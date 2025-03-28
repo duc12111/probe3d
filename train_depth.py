@@ -103,8 +103,12 @@ def train(
                 pred = pred.clamp(min=0.001, max=10.0)
 
             if i % 100 == 0:
-                writer.add_image('LOSS/pred', pred[0] / 10, ep * len(train_loader) + i)
-                writer.add_image('LOSS/gt', target[0] / 10, ep * len(train_loader) + i)
+                pred_vis = pred / pred.max()
+                target_vis = target / target.max()
+                print('pred_vis', pred_vis.max(), pred_vis.min())
+                print('target_vis', target_vis.max(), target_vis.min())
+                writer.add_image('LOSS/pred', pred_vis[0], ep * len(train_loader) + i)
+                writer.add_image('LOSS/gt', target_vis[0], ep * len(train_loader) + i)
 
             loss, loss_dict = loss_fn(pred, target)
             loss.backward()
@@ -165,8 +169,10 @@ def validate(
             pred = probe(feat).detach()
             pred = interpolate(pred, size=target.shape[-2:], mode="bilinear")
 
-            writer.add_image('EVAL/pred', pred[0] / 10 , iteration)
-            writer.add_image('EVAL/gt', target[0] / 10, iteration)
+            pred_vis = pred / pred.max()
+            target_vis = target / target.max()
+            writer.add_image('EVAL/pred', pred_vis[0], iteration)
+            writer.add_image('EVAL/gt', target_vis[0], iteration)
             iteration += 1
             
             loss, _ = loss_fn(pred, target)
@@ -264,7 +270,7 @@ def train_model(rank, world_size, cfg):
     model_name = model.checkpoint_name
     if "sam" in model_name or "vit-mae" in model_name:
         h, w = trainval_loader.dataset.__getitem__(0)["image"].shape[-2:]
-        model.resize_pos_embed(image_size=(h, w))
+        # model.resize_pos_embed(image_size=(h, w))
 
     # move to DDP
     if world_size > 1:
