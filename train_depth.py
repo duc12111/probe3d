@@ -141,17 +141,18 @@ def train(
                 val_loss, val_metrics = validate(
                     model, probe, valid_loader, loss_fn, scale_invariant=False,writer=writer, epoch= ep
                 )
+
                 logger.info(f"valid loss {ep}   | {val_loss:.4f}")
                 writer.add_scalar(f'Eval/loss', val_loss, (ep + 1) * len(train_loader))
                 for metric in val_metrics:
                     logger.info(f"valid Scale Aware {metric:10s} | {val_metrics[metric]:.4f}")
-                    writer.add_scalar(f'Eval/{metric}', val_metrics[metric], (ep+1) * len(train_loader))
-                _ , val_metrics = validate(
-                    model, probe, valid_loader, loss_fn, scale_invariant=False,writer=writer, epoch= ep
+                    writer.add_scalar(f'Eval/Scale_Aware_{metric}', val_metrics[metric], (ep+1) * len(train_loader))
+                val_loss_si, val_metrics_si = validate(
+                    model, probe, valid_loader, loss_fn, scale_invariant=True,writer=writer, epoch= ep
                 )
-                for metric in val_metrics:
-                    logger.info(f"valid Scale Invariant {metric:10s} | {val_metrics[metric]:.4f}")
-                    writer.add_scalar(f'Eval/{metric}', val_metrics[metric], (ep+1) * len(train_loader))
+                for metric in val_metrics_si:
+                    logger.info(f"valid Scale Invariant {metric:10s} | {val_metrics_si[metric]:.4f}")
+                    writer.add_scalar(f'Eval/{metric}', val_metrics_si[metric], (ep+1) * len(train_loader))
 
 def validate(
     model, probe, loader, loss_fn, verbose=True, scale_invariant=False, aggregate=True, writer=None, epoch=0
