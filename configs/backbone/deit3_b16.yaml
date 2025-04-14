@@ -3,3 +3,4 @@ model_size: base
 img_size: 384
 output: dense
 layer: -1
+mode: original

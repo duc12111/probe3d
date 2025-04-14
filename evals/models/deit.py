@@ -13,6 +13,7 @@ class DeIT(torch.nn.Module):
         output="dense",
         layer=-1,
         return_multilayer=False,
+        mode="original",
     ):
         super().__init__()
 
@@ -27,7 +28,8 @@ class DeIT(torch.nn.Module):
 
         self.vit = vit.eval()
         self.patch_size = patch_size
-        self.embed_size = (img_size / self.patch_size, img_size, self.patch_size)
+        self.image_size = self.vit.patch_embed.img_size
+        self.embed_size = (self.image_size[0] // self.patch_size, self.image_size[1] // self.patch_size)
         # deactivate strict image size for positional embeding resizing
         self.vit.patch_embed.strict_img_size = False
 
@@ -51,16 +53,25 @@ class DeIT(torch.nn.Module):
 
         # define layer name (for logging)
         self.layer = "-".join(str(_x) for _x in self.multilayers)
+        assert mode in ["original", "resize"], "Options: [original, resize]"
+        self.mode = mode
 
     def forward(self, images):
         B, _, h, w = images.shape
         h, w = h // self.patch_size, w // self.patch_size
 
         if (h, w) != self.embed_size:
-            self.embed_size = (h, w)
-            self.vit.pos_embed.data = resize_pos_embed(
-                self.vit.pos_embed[0], self.embed_size, False
-            )[None, :, :]
+            if self.mode == "original":
+                self.embed_size = (h, w)
+                self.vit.pos_embed.data = resize_pos_embed(
+                    self.vit.pos_embed[0], self.embed_size, False
+                )[None, :, :]
+            elif self.mode == "resize":
+                images = torch.nn.functional.interpolate(images, self.image_size, mode="bicubic")
+                h = self.embed_size[0]
+                w = self.embed_size[1]
+            else:
+                raise ValueError(f"Invalid mode: {self.mode}")
 
         x = self.vit.patch_embed(images)
         cls_tokens = self.vit.cls_token.expand(B, -1, -1)

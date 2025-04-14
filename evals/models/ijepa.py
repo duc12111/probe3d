@@ -43,14 +43,18 @@ class IJEPA(torch.nn.Module):
         self.layer = "-".join(str(_x) for _x in self.multilayers)
         assert mode in ["original", "resize"], f"Options: [original, resize] {mode}"
         self.mode = mode
+
     def forward(self, images):
         if self.mode == "resize":
-            images = F.interpolate(images, size=(self.image_size[0], self.image_size[1]), mode="bilinear", align_corners=False)
+            images = F.interpolate(images, size=self.image_size, mode="bilinear", align_corners=False)
         images = center_padding(images, self.patch_size)
         h, w = images.shape[-2:]
         h, w = h // self.patch_size, w // self.patch_size
 
-        x = self.vit.embeddings(pixel_values=images, interpolate_pos_encoding=True)
+        if self.mode == "resize":
+            x = self.vit.embeddings(pixel_values=images)
+        else:
+            x = self.vit.embeddings(pixel_values=images, interpolate_pos_encoding=True)
 
         embeds = []
         for i, blk in enumerate(self.vit.encoder.layer):

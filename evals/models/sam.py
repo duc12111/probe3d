@@ -9,7 +9,7 @@ from torch import nn
 
 
 class SAM(nn.Module):
-    def __init__(self, arch, output="dense", layer=-1, return_multilayer=False):
+    def __init__(self, arch, output="dense", layer=-1, return_multilayer=False, mode="original"):
         super().__init__()
 
         assert output in ["gap", "dense"], "Options: [gap, dense]"
@@ -58,6 +58,8 @@ class SAM(nn.Module):
 
         # define layer name (for logging)
         self.layer = "-".join(str(_x) for _x in self.multilayers)
+        assert mode in ["original", "resize"], "Options: [original, resize]"
+        self.mode = mode
 
     def resize_pos_embed(self, image_size):
         # get embed size
@@ -79,7 +81,15 @@ class SAM(nn.Module):
         assert h % self.patch_size == 0 and w % self.patch_size == 0, f"{h}, {w}"
 
         if h != self.image_size[0] or w != self.image_size[1]:
-            self.resize_pos_embed(image_size=(h, w))
+            if self.mode == "original":
+                self.resize_pos_embed(image_size=(h, w))
+            elif self.mode == "resize":
+                x = torch.nn.functional.interpolate(
+                    x, self.image_size, mode="bicubic"
+                )
+                h, w = self.image_size
+            else:
+                raise ValueError(f"Invalid mode: {self.mode}")
 
         # run vit
         x = self.vit.patch_embed(x)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 import math
+import os
 
 import numpy as np
 import torch
@@ -31,7 +32,7 @@ class VideoMAE(nn.Module):
 
         self.checkpoint_name = checkpoint.split("/")[1]
 
-        self.video_mae = VideoMAEForPreTraining.from_pretrained(checkpoint,token="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").videomae
+        self.video_mae = VideoMAEForPreTraining.from_pretrained(checkpoint).videomae
         self.video_mae = self.video_mae.eval()
 
 

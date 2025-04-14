@@ -16,6 +16,7 @@ class CLIP(nn.Module):
         output="dense",
         layer=-1,
         return_multilayer=False,
+        mode="original",
     ):
         super().__init__()
         assert output in ["dense-cls", "cls", "gap", "dense"]
@@ -28,6 +29,7 @@ class CLIP(nn.Module):
         )
         _clip_model = _clip_model.eval().to(torch.float32)
         self.visual = _clip_model.visual
+        self.image_size = self.visual.image_size
         del _clip_model
 
         # Extract some attributes from CLIP module for easy access.
@@ -56,11 +58,26 @@ class CLIP(nn.Module):
             self.multilayers = [layer]
 
         self.layer = "-".join(str(_x) for _x in self.multilayers)
+        assert mode in ["original", "resize"], "Options: [original, resize]"
+        self.mode = mode
 
     def forward(self, images):
         images = center_padding(images, self.patch_size)
         img_h, img_w = images.shape[-2:]
         out_hw = (img_h // self.patch_size, img_w // self.patch_size)
+
+        if (img_h, img_w) != self.image_size:
+            if self.mode == "original":
+                pos_embed = resize_pos_embed(self.visual.positional_embedding, out_hw)
+            elif self.mode == "resize":
+                images = torch.nn.functional.interpolate(images, self.image_size, mode="bicubic")
+                img_h, img_w = self.image_size
+                pos_embed = self.visual.positional_embedding
+                out_hw = (self.image_size[0] // self.patch_size, self.image_size[1] // self.patch_size)
+            else:
+                raise ValueError(f"Invalid mode: {self.mode}")
+        else:
+            pos_embed = self.visual.positional_embedding
 
         # clip stuff
         x = self.visual.conv1(images)
@@ -72,7 +89,6 @@ class CLIP(nn.Module):
         x = torch.cat([_cls_embed.to(x.dtype), x], dim=1)
 
         # add pos embed
-        pos_embed = resize_pos_embed(self.visual.positional_embedding, x_hw)
         x = self.visual.ln_pre(x + pos_embed.to(x.dtype))
 
         embeds = []

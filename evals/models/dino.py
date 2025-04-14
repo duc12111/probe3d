@@ -60,6 +60,7 @@ class DINO(torch.nn.Module):
         self.layer = "-".join(str(_x) for _x in self.multilayers)
         self.mode = mode
         assert mode in ["original", "resize"], f"Options: [original, resize] {mode}"
+        self.name = f"{self.model_name}_{self.checkpoint_name}_{self.layer}"
     def forward(self, images):
 
         # pad images (if needed) to ensure it matches patch_size

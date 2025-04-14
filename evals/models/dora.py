@@ -8,7 +8,11 @@ from .utils import center_padding, tokens_to_output
 
 
 class DoRA(torch.nn.Module):
-    def __init__(self, arch="vit_s16_wt_venice_100",output="dense-cls",layer=-1, return_multilayer=False):
+    def __init__(self, arch="vit_s16_wt_venice_100",
+                output="dense-cls",
+                layer=-1,
+                return_multilayer=False,
+                mode:str="original"):
         super().__init__()
         #TODO: check if support dense-cls
         assert output in ["dense-cls", "dense"], "Options: [dense-cls, dense]"
@@ -31,7 +35,6 @@ class DoRA(torch.nn.Module):
         feat_dim = self.vit.embed_dim * 2 if output == "dense-cls" else self.vit.embed_dim
         self.patch_size = self.vit.patch_size
         self.image_size = [self.vit.patch_embed.img_size, self.vit.patch_embed.img_size]
-        assert self.patch_size == 16
 
         num_layers = len(self.vit.blocks)
         multilayers = [
@@ -51,10 +54,16 @@ class DoRA(torch.nn.Module):
 
         # define layer name (for logging)
         self.layer = "-".join(str(_x) for _x in self.multilayers)
+        assert mode in ["original", "resize"], f"Options: [original, resize] {mode}"
+        self.mode = mode
+        self.name = f"{self.checkpoint_name}_{self.layer}_{self.mode}"
     
     def forward(self, images):
         # pad images (if needed) to ensure it matches patch_size
         images = center_padding(images, self.patch_size)
+        if self.mode == "resize":
+            images = torch.nn.functional.interpolate(images, size=self.image_size, mode="bilinear", align_corners=False)       
+
         h, w = images.shape[-2:]
         h, w = h // self.patch_size, w // self.patch_size
 

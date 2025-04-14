@@ -8,6 +8,16 @@ from transformers.models.vit_mae.modeling_vit_mae import (
     get_2d_sincos_pos_embed_from_grid,
 )
 
+def fit_to_patch(images, patch_size):
+    H, W = images.shape[-2:]
+
+    hh, ww = H // patch_size, W // patch_size
+    H_fit, W_fit = hh * patch_size, ww * patch_size
+
+    if H_fit != H or W_fit != W:
+        images = F.interpolate(images, (H_fit, W_fit), mode="bilinear")
+
+    return images, (hh, ww)
 
 def resize_pos_embed(
     pos_embed: torch.Tensor, hw: tuple[int, int], has_cls_token: bool = True
@@ -112,7 +122,7 @@ def tokens_to_output(output_type, dense_tokens, cls_token, feat_hw):
         h, w = feat_hw
         dense_tokens = E.rearrange(dense_tokens, "b (h w) c -> b c h w", h=h, w=w)
         output = dense_tokens.contiguous()
-    elif output_type == "dense-temperal":
+    elif output_type == "dense-temporal":
         h, w = feat_hw
         assert dense_tokens.shape[1] % (h * w) == 0
         t = dense_tokens.shape[1] // (h * w)

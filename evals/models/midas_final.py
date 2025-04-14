@@ -6,7 +6,7 @@ import torch
 from .utils import resize_pos_embed, tokens_to_output
 
 
-def midas_forward(self, x):
+def midas_forward(self, x, mode="original"):
     """
     Modification of timm's VisionTransformer forward
     """
@@ -14,11 +14,19 @@ def midas_forward(self, x):
     h, w = x.shape[2:]
     emb_hw = (h // self.patch_size, w // self.patch_size)
     # assert h == w, f"BeIT can only handle square images, not ({h}, {w})."
-    if (h, w) != self.image_size:
+    if (h, w) != self.image_size and self.mode == "original":
         self.image_size = (h, w)
         self.patch_embed.img_size = (h, w)
         self.pos_embed.data = resize_pos_embed(self.pos_embed[0], emb_hw, True)[None]
-
+    elif self.mode == "resize":
+        h, w = self.image_size
+        x = torch.nn.functional.interpolate(
+            x,self.image_size, mode="bicubic"
+        )
+        emb_hw = (self.image_size[0] // self.patch_size, self.image_size[1] // self.patch_size)
+    else:
+        raise ValueError(f"Invalid mode: {mode}")
+    
     # actual forward from beit
     x = self.patch_embed(x)
     x = torch.cat((self.cls_token.expand(x.shape[0], -1, -1), x), dim=1)
@@ -77,11 +85,12 @@ def beit_forward_features(self, x):
     return outputs[0] if len(outputs) == 1 else outputs
 
 
-def make_beit_backbone(layer=-1, output="dense", midas=False, return_multilayer=False):
+def make_beit_backbone(layer=-1, output="dense", midas=False, return_multilayer=False, mode="original"):
 
     if midas:
         midas = torch.hub.load("intel-isl/MiDaS", "DPT_Large")
         model = midas.pretrained.model
+        model.mode = mode
         model.forward = types.MethodType(midas_forward, model)
     else:
         model = timm.create_model("beit_large_patch16_384", pretrained=True)

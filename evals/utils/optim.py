@@ -26,7 +26,7 @@ import math
 
 import numpy as np
 import torch
-from torch.optim.lr_scheduler import LambdaLR
+from torch.optim.lr_scheduler import LambdaLR, ConstantLR
 
 
 

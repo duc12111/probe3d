@@ -3,3 +3,4 @@ arch: "convnext_base_w"
 checkpoint: "laion2b_s13b_b82k_augreg"
 output: dense
 layer: -1
+mode: original
