@@ -4,6 +4,13 @@ depth_exps
 snorm_exps
 **/logdir
 
+# Model files
+*.pt
+*.tar
+*.log
+*.json
+*.png
+*.sbatch
 
 # vim
 .*.swp

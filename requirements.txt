@@ -23,3 +23,4 @@ pre-commit
 hydra-submitit-launcher
 pandas
 seaborn
+faiss-gpu
