@@ -8,7 +8,14 @@ import torch
 from torch.nn import functional as nn_F
 from torch.nn.functional import cosine_similarity
 
-res = faiss.StandardGpuResources()  # use a single GPU
+# Initialize FAISS GPU resources if available, otherwise use CPU
+try:
+    res = faiss.StandardGpuResources()  # use a single GPU
+    use_gpu = True
+except AttributeError:
+    res = None
+    use_gpu = False
+    print("Warning: FAISS GPU not available, using CPU version")
 
 
 def faiss_knn(query, target, k):
@@ -17,9 +24,17 @@ def faiss_knn(query, target, k):
     target = target.contiguous()
 
     num_elements, feat_dim = query.shape
-    gpu_index = faiss.GpuIndexFlatL2(res, feat_dim)
-    gpu_index.add(target)
-    dist, index = gpu_index.search(query, k)
+    
+    if use_gpu and res is not None:
+        gpu_index = faiss.GpuIndexFlatL2(res, feat_dim)
+        gpu_index.add(target)
+        dist, index = gpu_index.search(query, k)
+    else:
+        # Fallback to CPU version
+        cpu_index = faiss.IndexFlatL2(feat_dim)
+        cpu_index.add(target)
+        dist, index = cpu_index.search(query, k)
+    
     return dist, index
 
 

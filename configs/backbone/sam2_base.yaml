@@ -1,0 +1,6 @@
+_target_: evals.models.sam2.SAM2
+arch: hiera-base-plus
+output: dense
+layer: -1
+mode: original
+use_trunk_features: false  # Set to true to use last 4 trunk layers instead of FPN features 

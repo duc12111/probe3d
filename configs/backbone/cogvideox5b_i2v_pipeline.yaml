@@ -1,0 +1,9 @@
+_target_: evals.models.cogvideox_pipeline_based.CogVideoXPipelineBased
+model_id: "THUDM/CogVideoX-5b-I2V"
+output: dense
+layer: -1
+return_multilayer: false
+mode: video_resize
+num_frames: 1
+prompt: ""
+low_memory_mode: true 

@@ -1,5 +1,5 @@
 _target_: evals.models.vjepa.VJEPA
-arch: vit_huge
+arch: vit_huge_384
 output: dense-temporal
 layer: -1
 num_frames: 1

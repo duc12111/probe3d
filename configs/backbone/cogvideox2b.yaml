@@ -1,0 +1,15 @@
+_target_: evals.models.cogvideox.CogVideoX
+model_id: "THUDM/CogVideoX-2b"
+time_step: 50
+output: dense
+layer: -1
+return_multilayer: false
+mode: video_resize
+num_frames: 2
+temporal_compression_ratio: 4
+prompt: ""
+add_noise: false
+# Memory optimization parameters
+vae_chunk_size: 2
+clear_cache_freq: 1
+low_memory_mode: true 

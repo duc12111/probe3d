@@ -1,6 +1,6 @@
-_target_: evals.models.vjepa.VJEPA
+_target_: evals.models.vjepa2.VJEPA2
 arch: vit_huge
 output: dense-temporal
 layer: -1
 num_frames: 1
-mode: "original"
+mode: "img_resize"

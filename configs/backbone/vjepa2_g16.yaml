@@ -1,0 +1,6 @@
+_target_: evals.models.vjepa2.VJEPA2
+arch: vit_giant
+output: dense
+layer: -1
+num_frames: 1
+mode: "img_resize"

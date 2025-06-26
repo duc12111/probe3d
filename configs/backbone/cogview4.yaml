@@ -1,0 +1,6 @@
+_target_: evals.models.cogview3plus.CogView3Plus
+model_id: "THUDM/CogView3-Plus-3B"
+time_step: 50
+layer: -1
+output: dense
+mode: "resize" 
