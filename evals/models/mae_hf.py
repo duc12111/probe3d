@@ -1,10 +1,10 @@
-from __future__ import annotations
-
 import torch
 from torch import nn
 from transformers import ViTMAEForPreTraining
 
 from .utils import get_2d_sincos_pos_embed, tokens_to_output
+import torchvision.transforms as tf
+import torch.nn.functional as F
 
 
 class MAE(nn.Module):
@@ -16,15 +16,16 @@ class MAE(nn.Module):
         return_multilayer=False,
         mode="original",
     ):
-        """Code based on transformer database"""
+        """MAE Model with HuggingFace token support and enhanced preprocessing"""
         super().__init__()
 
         assert output in ["cls", "gap", "dense"], "Options: [cls, gap, dense]"
+
         self.output = output
 
         self.checkpoint_name = checkpoint.split("/")[1]
 
-        self.vit = ViTMAEForPreTraining.from_pretrained(checkpoint).vit
+        self.vit = ViTMAEForPreTraining.from_pretrained(checkpoint,token="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").vit
         self.vit = self.vit.eval()
 
         # resize pos embedding
@@ -60,7 +61,7 @@ class MAE(nn.Module):
         self.mode = mode
         
         # define name for logging/evaluation
-        self.name = f"mae_{self.checkpoint_name}_{self.layer}"
+        self.name = f"mae_hf_{self.checkpoint_name}_{self.layer}"
 
     def resize_pos_embed(self, image_size):
         assert image_size[0] % self.patch_size == 0
@@ -100,7 +101,14 @@ class MAE(nn.Module):
 
         return embeddings
 
+
     def forward(self, images):
+        # Apply ImageNet normalization
+        if images.max() > 2:  # Check if images are in [0, 255] range
+            images = images / 255.0
+        norm = tf.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        images = norm(images)
+        
         # check if positional embeddings are correct
         if self.image_size != images.shape[-2:]:
             if self.mode == "resize":
@@ -136,4 +144,4 @@ class MAE(nn.Module):
             )
             outputs.append(x_i)
 
-        return outputs[0] if len(outputs) == 1 else outputs
+        return outputs[0] if len(outputs) == 1 else outputs 

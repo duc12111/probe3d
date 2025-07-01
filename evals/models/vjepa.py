@@ -3,10 +3,12 @@ import math
 from pathlib import Path
 import torch
 from torch import nn
-from .utils import center_padding, tokens_to_output
+from .utils import center_padding, fit_to_patch, tokens_to_output
 import logging
 import numpy as np
 import torch.nn.functional as F
+import torchvision.transforms as tf
+
 
 
 VIT_EMBED_DIMS = {
@@ -23,14 +25,15 @@ logger = logging.getLogger()
 
 
 class VJEPA(nn.Module):
-    def __init__(self, arch="vit_large",output="dense",layer=-1, return_multilayer=False):
+    def __init__(self, arch="vit_large",output="dense",layer=-1, return_multilayer=False, mode="original",num_frames=1):
         super().__init__()
-        assert output in ["dense","dense-temperal"], "Options: [dense, dense-temperal]"
+        assert output in ["dense","dense-temporal"], "Options: [dense, dense-temporal]"
         self.output = output
         self.checkpoint_name = f"vjepa_{arch}"
         ckpt_paths = {
             "vit_large": "checkpoint_vjepa_vitl16_videomix2m.pth",
             "vit_huge": "checkpoint_vjepa_vith16_videomix2m.pth",
+            "vit_huge_384": "vith16-384.pth.tar",
         }
         assert arch in ckpt_paths, "arch not supported"
 
@@ -41,20 +44,48 @@ class VJEPA(nn.Module):
             self.vit = vit_large(num_frames=16,tubelet_size=2)
         elif arch == "vit_huge":
             self.vit = vit_huge(num_frames=16,tubelet_size=2)
+        elif arch == "vit_huge_384":
+            self.vit = vit_huge(num_frames=16,tubelet_size=2,img_size=384)
         load_pretrained(self.vit, ckpt_path)
         self.vit.eval()
         for p in self.vit.parameters():
             p.requires_grad = False
 
-        self.num_frames = self.vit.tubelet_size
-        self.tubelet_size = self.vit.tubelet_size
-        feat_dim = self.vit.embed_dim
-        if self.output == "dense-temperal":
-            feat_dim = feat_dim * self.num_frames // self.tubelet_size
+        # Set header parameters
         self.patch_size = self.vit.patch_size
         self.image_size = [self.vit.input_size, self.vit.input_size]
-        assert self.patch_size == 16
+        self.pretrained_spatial_patch_dim = (self.image_size[0]//self.patch_size, self.image_size[1]//self.patch_size)        
 
+        self.num_frames = num_frames
+        self.pretrained_num_frames = self.vit.num_frames
+        self.tubelet_size = self.vit.tubelet_size
+
+        self.name = f"{self.checkpoint_name}_{self.num_frames}_{self.tubelet_size}"
+        feat_dim = self.vit.embed_dim
+        # if self.output == "dense-temporal":
+        #     feat_dim = feat_dim * self.num_frames // self.tubelet_size
+        if num_frames == 1:
+            #This is single image case, which means we have to adapt embedding projection
+            original_projection = self.vit.patch_embed.proj
+            original_weights = original_projection.weight
+            new_weights = original_weights.sum(dim=2, keepdim=True) #sum temporal kernel dimension to get 2d kernel
+            new_projection = torch.nn.Conv3d(
+                in_channels=3,
+                out_channels=original_projection.out_channels,
+                kernel_size=(1, original_projection.kernel_size[1], original_projection.kernel_size[2]),
+                stride=(1, original_projection.stride[1], original_projection.stride[2])
+            )
+
+            new_projection.weight.data = new_weights
+            if original_projection.bias is not None:
+                new_projection.bias.data = original_projection.bias.data.clone()
+
+            self.vit.patch_embed.proj = new_projection
+            self.tubelet_size=1
+
+        elif num_frames > 1:
+            assert num_frames % self.tubelet_size == 0
+        
         num_layers = len(self.vit.blocks)
         multilayers = [
             num_layers // 4 - 1,
@@ -62,7 +93,6 @@ class VJEPA(nn.Module):
             num_layers // 4 * 3 - 1,
             num_layers - 1,
         ]
-
         if return_multilayer:
             self.feat_dim = [feat_dim, feat_dim, feat_dim, feat_dim]
             self.multilayers = multilayers
@@ -71,24 +101,114 @@ class VJEPA(nn.Module):
             layer = multilayers[-1] if layer == -1 else layer
             self.multilayers = [layer]
 
-        # define layer name (for logging)
         self.layer = "-".join(str(_x) for _x in self.multilayers)
-    
-    def forward(self, images):
-        # pad images (if needed) to ensure it matches patch_size
-        images = center_padding(images, self.patch_size)
-        h, w = images.shape[-2:]
-        h, w = h // self.patch_size, w // self.patch_size
-        images = images.unsqueeze(2)  # inserts new dimension at index 2
-        images = images.expand(-1, -1, self.num_frames, -1, -1)  # [B,C,T,H,W] example [B,3,16,224,224]
+        assert mode in ["video_resize", "video", "img", "img_resize", "video_cutpos","video_resize_cutpos"], f"Invalid mode {mode}"
+        self.mode = mode
+        
+    def _interpolate_pos_encoding_3d(self, x, pos_embed, N_t, is_video=True):
+        """
+        Our own implementation of interpolate_pos_encoding based on Vjepa's implementation
+        """
+        _, N, dim = pos_embed.shape
 
-        pos_embed = self.vit.pos_embed
-        if pos_embed is not None:
-            pos_embed = self.vit.interpolate_pos_encoding(images, pos_embed)
-        x = self.vit.patch_embed(images)
+        if is_video:
+
+            # If pos_embed already corret size, just return
+            _, _, T, H, W = x.shape
+            if H == self.image_size[0] and W == self.image_size[1] and T == self.num_frames:
+                return pos_embed
+
+            # Convert depth, height, width of input to be measured in patches
+            # instead of pixels/frames
+            T = T // self.tubelet_size
+            H = H // self.patch_size
+            W = W // self.patch_size
+
+            # Compute the initialized shape of the positional embedding measured
+            # in patches
+            N_h = self.pretrained_spatial_patch_dim[0]
+            N_w = self.pretrained_spatial_patch_dim[1]
+            assert N_h * N_w * N_t == N, f'Positional embedding initialized incorrectly: {N_h} * {N_w} * {N_t} != {N}'
+
+            # Compute scale factor for spatio-temporal interpolation
+            scale_factor = (T/N_t, H/N_h, W/N_w)
+
+            pos_embed = torch.nn.functional.interpolate(
+                pos_embed.reshape(1, N_t, N_h, N_w, dim).permute(0, 4, 1, 2, 3),
+                scale_factor=scale_factor,
+                mode='trilinear')
+            pos_embed = pos_embed.permute(0, 2, 3, 4, 1).view(1, -1, dim)
+            return pos_embed
+        
+    
+    def _get_pos_embed(self, videos):
+        if self.num_frames > 1:
+            pos_embed = self.vit.pos_embed
+            if "cutpos" in self.mode:
+                pos_embed = self.vit.pos_embed[:, : self.pretrained_spatial_patch_dim[0]*self.pretrained_spatial_patch_dim[1]*(self.num_frames//self.tubelet_size)]
+                pos_embed = self._interpolate_pos_encoding_3d(videos, pos_embed, self.num_frames//self.tubelet_size)
+            else:
+                pos_embed = self._interpolate_pos_encoding_3d(videos, pos_embed, self.pretrained_num_frames//self.tubelet_size)
+            return pos_embed
+        else:
+            _, _, _, H, W = videos.shape
+            pos_embed = self.vit.pos_embed
+            _, N, dim = pos_embed.shape
+            pos_embed_first_frame = pos_embed[:, : self.pretrained_spatial_patch_dim[0]*self.pretrained_spatial_patch_dim[1]]
+            if H == self.image_size[0] and W == self.image_size[1]:
+                return pos_embed_first_frame
+
+            # Compute scale factor for spatial interpolation
+            npatch = (H // self.patch_size , W // self.patch_size) #New patch N
+            scale_factor = (npatch[0] / self.pretrained_spatial_patch_dim[0], npatch[1] / self.pretrained_spatial_patch_dim[1]) #Scale factor
+
+            pos_embed = torch.nn.functional.interpolate(
+                pos_embed_first_frame.reshape(1, self.pretrained_spatial_patch_dim[0], self.pretrained_spatial_patch_dim[1], dim).permute(0, 3, 1, 2),
+                scale_factor=scale_factor,
+                mode='bicubic')
+            pos_embed = pos_embed.permute(0, 2, 3, 1).view(1, -1, dim)
+
+            return pos_embed
+        
+    def _get_embeddings(self, videos):
+        """
+        Get embeddings for videos
+        """
+        x = self.vit.patch_embed(videos)
+        pos_embed = self._get_pos_embed(videos)
         if pos_embed is not None:
             x += pos_embed
-        B, N, D = x.shape        
+        return x
+    
+    def preprocess(self, x):
+        if x.ndim == 4:
+            B, C, H, W = x.shape
+            # preprocess to [B,C,T,H,W]
+            if "resize" in self.mode:
+                x = F.interpolate(x, size=self.image_size, mode="bilinear", align_corners=False)
+            x,hw = fit_to_patch(x, self.patch_size)
+            x = x.unsqueeze(2)  # inserts new dimension at index 2
+            x = x.expand(-1, -1, self.num_frames, -1, -1)  # [B,C,T,H,W] example [B,3,16,224,224]
+        else:
+            B, T, C, H, W = x.shape
+            # swap T and C dimensions to match expected format [B,C,T,H,W]
+            x = x.permute(0, 2, 1, 3, 4)
+            if "resize" in self.mode:
+                x = F.interpolate(x, size=self.image_size, mode="bilinear", align_corners=False)
+            x,hw = fit_to_patch(x, self.patch_size)
+        return x
+
+    def forward(self, videos):
+        # Preprocess input - this converts to [B, C, T, H, W] format
+        videos = self.preprocess(videos)
+        
+        # After preprocessing, videos should be in [B, C, T, H, W] format
+        assert videos.dim() == 5, f"Expected 5D input after preprocessing, got {videos.dim()}D"
+        
+        h, w = videos.shape[-2:]
+        h, w = h // self.patch_size, w // self.patch_size
+
+        x = self._get_embeddings(videos)     
 
         embeds = []
         for i, blk in enumerate(self.vit.blocks):
@@ -98,15 +218,13 @@ class VJEPA(nn.Module):
                 if len(embeds) == len(self.multilayers):
                     break
 
-        num_spatial = h * w
         outputs = []
         for i, x_i in enumerate(embeds):
-            cls_tok = x_i[:, 0]
-            # ignoring register tokens
-            spatial = x_i[:, -1 * num_spatial :]
             x_i = tokens_to_output(
-                self.output, x_i if self.output == "dense-temperal" else x_i[:, :h*w],
-                None, (h, w)
+                self.output,
+                x_i if self.output == "dense-temporal" else x_i[:, : h * w],
+                None,
+                (h, w),
             )
             outputs.append(x_i)
 
@@ -703,7 +821,7 @@ def vit_giant(patch_size=16, **kwargs):
 
 def vit_gigantic(patch_size=14, **kwargs):
     model = VisionTransformer(
-        patch_size=patch_size, embed_dim=1664, depth=48, num_heads=16, mpl_ratio=64/13,
+        patch_size=patch_size, embed_dim=1664, depth=48, num_heads=16, mlp_ratio=64/13,
         qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs
     )
     return model

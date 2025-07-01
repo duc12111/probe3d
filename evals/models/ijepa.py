@@ -43,6 +43,9 @@ class IJEPA(torch.nn.Module):
         self.layer = "-".join(str(_x) for _x in self.multilayers)
         assert mode in ["original", "resize"], f"Options: [original, resize] {mode}"
         self.mode = mode
+        
+        # Add name attribute for logging (similar to other models)
+        self.name = f"ijepa_{self.checkpoint_name.replace('/', '_')}_{self.layer}"
 
     def forward(self, images):
         if self.mode == "resize":
